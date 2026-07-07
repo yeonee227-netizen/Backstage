@@ -41,11 +41,9 @@ const store = {
   },
 };
 
-/* 백업 파일 내보내기: BACKSTAGE-YYYY-MM-DD.json 다운로드 */
+/* 백업 파일 내보내기: 항상 동일한 이름(BACKSTAGE.json)으로 저장 */
 const exportBackup = (data) => {
-  const t = new Date();
-  const p2 = (n) => String(n).padStart(2, "0");
-  const name = `BACKSTAGE-${t.getFullYear()}-${p2(t.getMonth() + 1)}-${p2(t.getDate())}.json`;
+  const name = "BACKSTAGE.json";
   try {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -112,7 +110,6 @@ const WK = ["일", "월", "화", "수", "목", "금", "토"];
 const VENUE_STATUS = ["연락예정", "연락중", "확정", "보류", "거절"];
 const VSC = { 연락예정: C.gray, 연락중: C.blue, 확정: C.teal, 보류: C.gold, 거절: C.red };
 const ATT = { 출석: C.teal, 보강: C.gold, 결석: C.red };
-const JKIND = { 일지: C.blue, 깨달음: C.gold, 아이디어: C.violet };
 const KEY = "backstage-v1";
 
 /* ───────────── 유틸 ───────────── */
@@ -164,6 +161,12 @@ const defaultSettings = () => ({
   ],
   incomeCats: ["연주", "레슨", "녹음", "기타수입"],
   expenseCats: ["장비", "교통", "식비", "스튜디오", "교육", "생활", "기타"],
+  journalKinds: [
+    { id: "jk_log", name: "일지", color: C.blue },
+    { id: "jk_insight", name: "깨달음", color: C.gold },
+    { id: "jk_idea", name: "아이디어", color: C.violet },
+  ],
+  pracNames: { tasks: "과제", routine: "루틴", journal: "일지" },
   homeWidgets: { stats: true, values: true, unpaid: true, today: true, todo: true },
 });
 
@@ -177,16 +180,22 @@ function normalizeBackup(obj) {
   const base = emptyData();
   const out = { ...base, ...obj };
   out.settings = { ...base.settings, ...(obj && obj.settings ? obj.settings : {}) };
-  ["values", "eventTypes", "incomeCats", "expenseCats"].forEach((k) => {
+  ["values", "eventTypes", "incomeCats", "expenseCats", "journalKinds"].forEach((k) => {
     if (!Array.isArray(out.settings[k]) || !out.settings[k].length) out.settings[k] = base.settings[k];
   });
   if (!out.settings.homeWidgets || typeof out.settings.homeWidgets !== "object") out.settings.homeWidgets = base.settings.homeWidgets;
+  if (!out.settings.pracNames || typeof out.settings.pracNames !== "object") out.settings.pracNames = base.settings.pracNames;
   ["events", "todos", "students", "tasks", "routine", "scores", "venues", "transactions", "journal"].forEach((k) => {
     if (!Array.isArray(out[k])) out[k] = [];
   });
   if (!out.routineChecks || typeof out.routineChecks !== "object") out.routineChecks = {};
   return out;
 }
+
+const pracNamesOf = (s) => {
+  const p = (s && s.pracNames) || {};
+  return { tasks: p.tasks || "과제", routine: p.routine || "루틴", journal: p.journal || "일지" };
+};
 
 function seedData() {
   const base = emptyData();
@@ -219,10 +228,6 @@ function seedData() {
     { id: uid(), label: "곡 카피 · 차트", min: 40, color: C.violet },
     { id: uid(), label: "즉흥 · 크리에이티브", min: 20, color: C.red },
   ];
-  const scores = [
-    { id: uid(), title: "Autumn Leaves", artist: "Jazz Standard", key: "Gm", genre: "재즈", link: "", memo: "브러시 버전 연습" },
-    { id: uid(), title: "Rosanna", artist: "Toto", key: "G", genre: "팝 · 록", link: "", memo: "하프타임 셔플" },
-  ];
   const venues = [
     { id: uid(), name: "클럽 문라이즈", person: "김실장", contact: "02-000-0000", status: "확정", last: k(-2), memo: "이번 달 둘째 주 트리오 확정" },
     { id: uid(), name: "블루룸 재즈살롱", person: "", contact: "", status: "연락중", last: k(-1), memo: "다음 달 라인업 회신 대기" },
@@ -240,7 +245,7 @@ function seedData() {
     { id: uid(), text: "문라이즈 셋리스트 보내기", done: false },
     { id: uid(), text: "심벌 펠트 교체", done: false },
   ];
-  return { ...base, events, students, tasks, routine, scores, venues, transactions, journal, todos };
+  return { ...base, events, students, tasks, routine, venues, transactions, journal, todos };
 }
 
 /* ───────────── 전역 스타일 ───────────── */
@@ -789,15 +794,18 @@ function StudentDetail({ st, back }) {
 
 /* ───────────── 연습 탭 ───────────── */
 function PracticeTab() {
-  const [seg, setSeg] = useState("과제");
+  const { d } = useApp();
+  const P = pracNamesOf(d.settings);
+  const keys = ["tasks", "routine", "journal"];
+  const labels = keys.map((k) => P[k]);
+  const [segK, setSegK] = useState("tasks");
   return (
     <>
-      <TabTitle title="연습" sub="과제 · 루틴 · 악보 · 일지를 한 곳에서" />
-      <Seg opts={["과제", "루틴", "악보", "일지"]} val={seg} onChange={setSeg} />
-      {seg === "과제" && <TasksView />}
-      {seg === "루틴" && <RoutineView />}
-      {seg === "악보" && <ScoresView />}
-      {seg === "일지" && <JournalView />}
+      <TabTitle title="연습" sub={`${P.tasks} · ${P.routine} · ${P.journal}`} />
+      <Seg opts={labels} val={P[segK]} onChange={(l) => setSegK(keys[labels.indexOf(l)] || "tasks")} />
+      {segK === "tasks" && <TasksView />}
+      {segK === "routine" && <RoutineView />}
+      {segK === "journal" && <JournalView />}
     </>
   );
 }
@@ -864,7 +872,7 @@ function RoutineView() {
         {d.routine.length ? (
           <Card>
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 13 }}>
-              <div style={{ fontSize: 15.5, fontWeight: 800 }}>오늘의 루틴</div>
+              <div style={{ fontSize: 15.5, fontWeight: 800 }}>오늘의 {pracNamesOf(d.settings).routine}</div>
               <div style={{ fontSize: 13, fontWeight: 800, color: checks.length === d.routine.length ? C.teal : C.gold }}>{checks.length}/{d.routine.length} · 총 {total}분</div>
             </div>
             <div style={{ display: "flex", height: 16, gap: 2 }}>
@@ -912,51 +920,23 @@ function RoutineView() {
   );
 }
 
-function ScoresView() {
-  const { d, open } = useApp();
-  const [q, setQ] = useState("");
-  const list = d.scores.filter((s) => !q || `${s.title} ${s.artist || ""} ${s.genre || ""}`.toLowerCase().includes(q.toLowerCase()));
-  return (
-    <>
-      <div style={{ position: "relative", marginTop: 16 }}>
-        <Search size={16} color={C.faint} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)" }} />
-        <input className="inp" style={{ paddingLeft: 40 }} placeholder="곡명 · 아티스트 · 장르 검색" value={q} onChange={(e) => setQ(e.target.value)} />
-      </div>
-      <div style={{ marginTop: 12 }}>
-        {list.length ? list.map((s) => (
-          <Card key={s.id} onClick={() => open({ k: "score", init: { id: s.id } })} style={{ display: "flex", alignItems: "center", gap: 13, marginBottom: 10, padding: "13px 15px" }}>
-            <div style={{ width: 42, height: 42, borderRadius: 13, background: C.goldBg, border: "1px solid rgba(231,187,84,0.25)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Music size={18} color={C.gold} /></div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 15, fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title}</div>
-              <div style={{ fontSize: 12.5, color: C.dim, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {[s.artist, s.key ? `Key ${s.key}` : "", s.genre].filter(Boolean).join(" · ") || "정보를 추가해 보세요"}
-              </div>
-            </div>
-            {s.link ? <a href={s.link} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="ib" style={{ flexShrink: 0 }}><ExternalLink size={17} color={C.blue} /></a> : null}
-          </Card>
-        )) : <Empty Icon={Music} title={q ? "검색 결과가 없어요" : "악보 보관함이 비어 있어요"} sub={q ? "다른 검색어로 찾아보세요" : "곡 정보와 파일 링크로 악보를 정리해요"} />}
-        {d.scores.length > 0 && <div style={{ fontSize: 12, color: C.faint, padding: "4px 4px 0", lineHeight: 1.5 }}>파일 자체는 드라이브 · 클라우드에 두고, 링크로 연결해 보관하는 방식이에요.</div>}
-      </div>
-      <FAB onClick={() => open({ k: "score" })} />
-    </>
-  );
-}
-
 function JournalView() {
   const { d, open } = useApp();
   const [f, setF] = useState("전체");
+  const kinds = d.settings.journalKinds || [];
+  const colorOf = (name) => { const k = kinds.find((x) => x.name === name); return k ? k.color : C.gray; };
   const list = d.journal.filter((j) => f === "전체" || j.kind === f).slice().sort((a, b) => b.date.localeCompare(a.date));
   return (
     <>
       <div style={{ display: "flex", gap: 7, marginTop: 16, overflowX: "auto", paddingBottom: 2 }}>
-        {["전체", ...Object.keys(JKIND)].map((k) => <Chip key={k} on={f === k} color={JKIND[k]} onClick={() => setF(k)}>{k}</Chip>)}
+        {["전체", ...kinds.map((x) => x.name)].map((k) => <Chip key={k} on={f === k} color={k === "전체" ? undefined : colorOf(k)} onClick={() => setF(k)}>{k}</Chip>)}
       </div>
       <div style={{ marginTop: 12 }}>
         {list.length ? list.map((j) => (
           <Card key={j.id} onClick={() => open({ k: "journal", init: { id: j.id } })} style={{ marginBottom: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
               <span style={{ fontSize: 12.5, fontWeight: 800, color: C.dim }}>{fmtKo(j.date)}</span>
-              <span style={{ fontSize: 11, fontWeight: 800, color: JKIND[j.kind] || C.gray, background: `${JKIND[j.kind] || C.gray}1E`, padding: "3px 9px", borderRadius: 100 }}>{j.kind}</span>
+              <span style={{ fontSize: 11, fontWeight: 800, color: colorOf(j.kind), background: `${colorOf(j.kind)}1E`, padding: "3px 9px", borderRadius: 100 }}>{j.kind}</span>
             </div>
             {j.title && <div style={{ fontSize: 15.5, fontWeight: 800, marginBottom: 5 }}>{j.title}</div>}
             <div style={{ fontSize: 13.5, color: C.dim, lineHeight: 1.6, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{j.content}</div>
@@ -1090,11 +1070,15 @@ function EventSheet({ init }) {
   const editing = init && init.id ? d.events.find((e) => e.id === init.id) : null;
   const [f, setF] = useState(() => editing
     ? { ...editing, fee: editing.fee ? fmtNum(editing.fee) : "" }
-    : { title: "", typeId: (init && init.typeId) || d.settings.eventTypes[0].id, date: (init && init.date) || todayKey(), time: "", venue: (init && init.venue) || "", fee: "", memo: "", paid: false, repeat: "없음", repeatN: "8" });
+    : { title: "", typeId: (init && init.typeId) || d.settings.eventTypes[0].id, date: (init && init.date) || todayKey(), time: "", venue: (init && init.venue) || "", fee: "", memo: "", paid: false, repeat: "없음" });
   const u = (p) => setF((s) => ({ ...s, ...p }));
   const fee = parseNum(f.fee);
   const repeating = !editing && f.repeat && f.repeat !== "없음";
-  const repN = Math.min(Math.max(parseNum(f.repeatN) || 0, 2), 52);
+  const REPN = { "매주": 26, "2주마다": 13, "매월": 6 };
+  const repN = repeating ? (REPN[f.repeat] || 8) : 1;
+  const curType = d.settings.eventTypes.find((t) => t.id === f.typeId);
+  const isLesson = !!curType && (curType.id === "t_lesson" || (curType.name || "").includes("레슨"));
+  const feeCycle = repeating && isLesson ? (f.repeat === "매주" ? 4 : f.repeat === "2주마다" ? 2 : 1) : 1;
   const groupCnt = editing && editing.groupId ? d.events.filter((e) => e.groupId === editing.groupId).length : 0;
   const save = () => {
     if (!f.date) return;
@@ -1111,7 +1095,7 @@ function EventSheet({ init }) {
     const extras = [];
     if (repeating) {
       for (let i = 1; i < repN; i++) {
-        extras.push({ ...ev, id: uid(), date: repShift(ev.date, f.repeat, i) });
+        extras.push({ ...ev, id: uid(), date: repShift(ev.date, f.repeat, i), fee: feeCycle > 1 && i % feeCycle !== 0 ? 0 : fee });
       }
     }
     setD((s) => {
@@ -1156,19 +1140,22 @@ function EventSheet({ init }) {
           </div>
         </Fld>
       )}
-      {repeating && (
-        <Fld label="반복 횟수">
-          <div style={{ position: "relative" }}>
-            <input className="inp" inputMode="numeric" value={f.repeatN} onChange={(e) => u({ repeatN: e.target.value.replace(/[^0-9]/g, "").slice(0, 2) })} style={{ paddingRight: 40 }} />
-            <span style={{ position: "absolute", right: 15, top: "50%", transform: "translateY(-50%)", color: C.dim, fontSize: 14, fontWeight: 700 }}>회</span>
-          </div>
-          <div style={{ fontSize: 12, color: C.faint, marginTop: 7, lineHeight: 1.55 }}>
-            {fmtKo(f.date)}부터 {f.repeat} 간격으로 총 {repN}개가 만들어져요 (마지막: {fmtKo(repShift(f.date, f.repeat, repN - 1))}). 만들어진 뒤에는 각각 따로 수정 · 입금 관리할 수 있어요.
-          </div>
-        </Fld>
+      {repeating && f.date && (
+        <div style={{ fontSize: 12, color: C.faint, margin: "-6px 2px 15px", lineHeight: 1.6 }}>
+          {fmtKo(f.date)}부터 약 6개월치({repN}개)가 자동으로 만들어져요 · 마지막 {fmtKo(repShift(f.date, f.repeat, repN - 1))}. 각 일정은 따로 수정 · 입금 관리돼요.
+        </div>
       )}
       <Fld label="장소"><input className="inp" placeholder="베뉴 · 연습실 이름" value={f.venue} onChange={(e) => u({ venue: e.target.value })} /></Fld>
-      <Fld label="페이"><MoneyInp value={f.fee} onChange={(v) => u({ fee: v })} /></Fld>
+      <Fld label={repeating && isLesson ? (feeCycle > 1 ? `레슨비 (${feeCycle}회 기준)` : "레슨비 (매회 기준)") : "페이"}>
+        <MoneyInp value={f.fee} onChange={(v) => u({ fee: v })} />
+        {repeating && isLesson && fee > 0 && (
+          <div style={{ fontSize: 12, color: C.faint, marginTop: 7, lineHeight: 1.55 }}>
+            {feeCycle > 1
+              ? `매주 레슨은 4회, 2주마다 레슨은 2회 기준이에요 — 레슨비가 ${feeCycle}회마다 각 구간의 첫 레슨에 한 번씩 입금 목록에 잡혀요.`
+              : "매월 레슨은 매회 레슨비가 입금 목록에 잡혀요."}
+          </div>
+        )}
+      </Fld>
       {fee > 0 && !repeating && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.card2, borderRadius: 13, padding: "13px 15px", marginBottom: 15, gap: 10 }}>
           <div>
@@ -1320,6 +1307,7 @@ function RecordSheet({ init }) {
 function TaskSheet({ init }) {
   const { d, setD, close, show } = useApp();
   const editing = init && init.id ? d.tasks.find((t) => t.id === init.id) : null;
+  const P = pracNamesOf(d.settings);
   const [f, setF] = useState(() => editing ? { ...editing } : { title: "", pos: "", progress: 0, memo: "", done: false });
   const u = (p) => setF((s) => ({ ...s, ...p }));
   const save = () => {
@@ -1330,7 +1318,7 @@ function TaskSheet({ init }) {
   };
   const del = () => { setD((s) => ({ ...s, tasks: s.tasks.filter((x) => x.id !== editing.id) })); close(); show("과제를 삭제했어요"); };
   return (
-    <Sheet title={editing ? "과제 수정" : "새 연습 과제"} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!f.title.trim()}>저장</Btn></>}>
+    <Sheet title={editing ? `${P.tasks} 수정` : `${P.tasks} 추가`} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!f.title.trim()}>저장</Btn></>}>
       <Fld label="과제"><input className="inp" placeholder="예) Groove Essentials 12번" value={f.title} onChange={(e) => u({ title: e.target.value })} /></Fld>
       <Fld label="현재 위치"><input className="inp" placeholder="예) 패턴 8까지 · 현재 160bpm" value={f.pos} onChange={(e) => u({ pos: e.target.value })} /></Fld>
       <Fld label={`진행률 · ${f.progress}%`}>
@@ -1349,6 +1337,7 @@ function TaskSheet({ init }) {
 function BlockSheet({ init }) {
   const { d, setD, close, show } = useApp();
   const editing = init && init.id ? d.routine.find((b) => b.id === init.id) : null;
+  const P = pracNamesOf(d.settings);
   const [f, setF] = useState(() => editing ? { ...editing, min: String(editing.min) } : { label: "", min: "20", color: PALETTE[d.routine.length % PALETTE.length] });
   const u = (p) => setF((s) => ({ ...s, ...p }));
   const save = () => {
@@ -1359,7 +1348,7 @@ function BlockSheet({ init }) {
   };
   const del = () => { setD((s) => ({ ...s, routine: s.routine.filter((x) => x.id !== editing.id) })); close(); show("루틴 블록을 삭제했어요"); };
   return (
-    <Sheet title={editing ? "루틴 블록 수정" : "새 루틴 블록"} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!f.label.trim()}>저장</Btn></>}>
+    <Sheet title={editing ? `${P.routine} 블록 수정` : `${P.routine} 블록 추가`} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!f.label.trim()}>저장</Btn></>}>
       <Fld label="이름"><input className="inp" placeholder="예) 루디먼츠, 곡 카피" value={f.label} onChange={(e) => u({ label: e.target.value })} /></Fld>
       <Fld label="시간 (분)"><input className="inp" inputMode="numeric" value={f.min} onChange={(e) => u({ min: e.target.value.replace(/[^0-9]/g, "") })} /></Fld>
       <Fld label="색상">
@@ -1373,38 +1362,12 @@ function BlockSheet({ init }) {
   );
 }
 
-/* ───────────── 시트: 악보 ───────────── */
-function ScoreSheet({ init }) {
-  const { d, setD, close, show } = useApp();
-  const editing = init && init.id ? d.scores.find((s) => s.id === init.id) : null;
-  const [f, setF] = useState(() => editing ? { ...editing } : { title: "", artist: "", key: "", genre: "", link: "", memo: "" });
-  const u = (p) => setF((s) => ({ ...s, ...p }));
-  const save = () => {
-    if (!f.title.trim()) return;
-    const sc = { ...f, id: editing ? editing.id : uid(), title: f.title.trim() };
-    setD((s) => ({ ...s, scores: editing ? s.scores.map((x) => (x.id === sc.id ? sc : x)) : [sc, ...s.scores] }));
-    close(); show(editing ? "악보 정보를 수정했어요" : "악보를 보관함에 추가했어요");
-  };
-  const del = () => { setD((s) => ({ ...s, scores: s.scores.filter((x) => x.id !== editing.id) })); close(); show("악보를 삭제했어요"); };
-  return (
-    <Sheet title={editing ? "악보 수정" : "새 악보"} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!f.title.trim()}>저장</Btn></>}>
-      <Fld label="곡명"><input className="inp" value={f.title} onChange={(e) => u({ title: e.target.value })} /></Fld>
-      <Fld label="아티스트"><input className="inp" value={f.artist} onChange={(e) => u({ artist: e.target.value })} /></Fld>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.6fr", gap: 10 }}>
-        <Fld label="키"><input className="inp" placeholder="예) Gm" value={f.key} onChange={(e) => u({ key: e.target.value })} /></Fld>
-        <Fld label="장르"><input className="inp" placeholder="예) 재즈, 펑크" value={f.genre} onChange={(e) => u({ genre: e.target.value })} /></Fld>
-      </div>
-      <Fld label="파일 링크"><input className="inp" placeholder="드라이브 · 클라우드 링크" value={f.link} onChange={(e) => u({ link: e.target.value })} /></Fld>
-      <Fld label="메모"><textarea className="inp" rows={3} placeholder="버전, 편곡 노트..." value={f.memo} onChange={(e) => u({ memo: e.target.value })} /></Fld>
-    </Sheet>
-  );
-}
-
 /* ───────────── 시트: 일지 ───────────── */
 function JournalSheet({ init }) {
   const { d, setD, close, show } = useApp();
+  const kinds = d.settings.journalKinds || [];
   const editing = init && init.id ? d.journal.find((j) => j.id === init.id) : null;
-  const [f, setF] = useState(() => editing ? { ...editing } : { date: todayKey(), kind: "일지", title: "", content: "" });
+  const [f, setF] = useState(() => editing ? { ...editing } : { date: todayKey(), kind: kinds.length ? kinds[0].name : "일지", title: "", content: "" });
   const u = (p) => setF((s) => ({ ...s, ...p }));
   const ok = f.content.trim() || f.title.trim();
   const save = () => {
@@ -1417,8 +1380,8 @@ function JournalSheet({ init }) {
   return (
     <Sheet title={editing ? "기록 수정" : "새 기록"} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!ok}>저장</Btn></>}>
       <Fld label="종류">
-        <div style={{ display: "flex", gap: 7 }}>
-          {Object.keys(JKIND).map((k) => <Chip key={k} on={f.kind === k} color={JKIND[k]} onClick={() => u({ kind: k })}>{k}</Chip>)}
+        <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+          {kinds.map((k) => <Chip key={k.id || k.name} on={f.kind === k.name} color={k.color} onClick={() => u({ kind: k.name })}>{k.name}</Chip>)}
         </div>
       </Fld>
       <Fld label="날짜"><input className="inp" type="date" value={f.date} onChange={(e) => u({ date: e.target.value })} /></Fld>
@@ -1477,6 +1440,26 @@ function SettingsSheet() {
   const [newInc, setNewInc] = useState("");
   const [newExp, setNewExp] = useState("");
   const fileRef = useRef(null);
+  const [newJK, setNewJK] = useState("");
+  const renameJKind = (id, name) => setD((x) => {
+    const old = x.settings.journalKinds.find((j) => j.id === id);
+    if (!old) return x;
+    return {
+      ...x,
+      settings: { ...x.settings, journalKinds: x.settings.journalKinds.map((j) => (j.id === id ? { ...j, name } : j)) },
+      journal: x.journal.map((e) => (e.kind === old.name ? { ...e, kind: name } : e)),
+    };
+  });
+  const delJKind = (id) => setD((x) => {
+    if ((x.settings.journalKinds || []).length <= 1) return x;
+    const removed = x.settings.journalKinds.find((j) => j.id === id);
+    const rest = x.settings.journalKinds.filter((j) => j.id !== id);
+    return {
+      ...x,
+      settings: { ...x.settings, journalKinds: rest },
+      journal: x.journal.map((e) => (removed && e.kind === removed.name ? { ...e, kind: rest[0].name } : e)),
+    };
+  });
   const doExport = () => { exportBackup(d); show("백업 파일을 내보냈어요"); };
   const onImport = (e) => {
     const file = e.target.files && e.target.files[0];
@@ -1550,6 +1533,31 @@ function SettingsSheet() {
         <Btn style={{ padding: "0 17px" }} onClick={() => { const n = newType.trim(); if (!n) return; setS({ eventTypes: [...s.eventTypes, { id: uid(), name: n, color: PALETTE[s.eventTypes.length % PALETTE.length], perf: false }] }); setNewType(""); }}><Plus size={18} /></Btn>
       </div>
 
+      <H>연습 탭 이름</H>
+      <div style={{ fontSize: 12, color: C.faint, marginBottom: 10, lineHeight: 1.5 }}>연습 탭의 메뉴 이름을 원하는 대로 바꿀 수 있어요. 비우면 기본 이름으로 돌아가요.</div>
+      {[["tasks", "과제"], ["routine", "루틴"], ["journal", "일지"]].map(([k, def]) => (
+        <div key={k} style={{ display: "flex", alignItems: "center", gap: 10, background: C.card2, borderRadius: 13, padding: "3px 15px", marginBottom: 8 }}>
+          <div style={{ fontSize: 11.5, color: C.faint, fontWeight: 800, width: 58, flexShrink: 0 }}>기본 {def}</div>
+          <input className="inp" style={{ background: "transparent", border: "none", padding: "11px 0", boxShadow: "none", flex: 1, minWidth: 0 }} placeholder={def}
+            value={s.pracNames && s.pracNames[k] !== undefined ? s.pracNames[k] : def}
+            onChange={(e) => setS({ pracNames: { ...pracNamesOf(s), ...(s.pracNames || {}), [k]: e.target.value } })} />
+        </div>
+      ))}
+
+      <H>일지 카테고리</H>
+      <div style={{ fontSize: 12, color: C.faint, marginBottom: 10, lineHeight: 1.5 }}>색 점을 누르면 색이 바뀌어요. 이름을 바꾸면 기존 기록에도 그대로 적용돼요.</div>
+      {(s.journalKinds || []).map((k) => (
+        <div key={k.id || k.name} style={{ display: "flex", alignItems: "center", gap: 7, background: C.card2, borderRadius: 13, padding: "9px 8px 9px 12px", marginBottom: 8 }}>
+          <button onClick={() => setS({ journalKinds: s.journalKinds.map((x) => (x.id === k.id ? { ...x, color: PALETTE[(PALETTE.indexOf(x.color) + 1) % PALETTE.length] } : x)) })} style={{ width: 22, height: 22, borderRadius: "50%", background: k.color, border: "2px solid rgba(255,255,255,0.15)", flexShrink: 0 }} />
+          <input className="inp" style={{ background: "transparent", border: "none", padding: "8px 4px", flex: 1, minWidth: 0, boxShadow: "none" }} value={k.name} onChange={(e) => renameJKind(k.id, e.target.value)} />
+          <button className="ib" style={{ padding: 6 }} onClick={() => delJKind(k.id)}><Trash2 size={14} color={C.faint} /></button>
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8 }}>
+        <input className="inp" placeholder="새 카테고리 이름" value={newJK} onChange={(e) => setNewJK(e.target.value)} />
+        <Btn style={{ padding: "0 17px" }} onClick={() => { const n = newJK.trim(); if (!n || (s.journalKinds || []).some((x) => x.name === n)) return; setS({ journalKinds: [...(s.journalKinds || []), { id: uid(), name: n, color: PALETTE[(s.journalKinds || []).length % PALETTE.length] }] }); setNewJK(""); }}><Plus size={18} /></Btn>
+      </div>
+
       <H>가계부 카테고리</H>
       <Lab>수입</Lab>
       <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 10 }}>
@@ -1599,10 +1607,7 @@ function SettingsSheet() {
       <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={onImport} />
       <Btn kind="g" style={{ width: "100%", marginBottom: 9, border: "1px solid rgba(231,187,84,0.45)", color: C.gold }} onClick={doExport}>백업 파일 내보내기 (.json)</Btn>
       <Btn kind="g" style={{ width: "100%", marginBottom: 9 }} onClick={() => fileRef.current && fileRef.current.click()}>백업 파일 불러오기</Btn>
-      <div style={{ fontSize: 12, color: C.faint, margin: "2px 0 18px", lineHeight: 1.6 }}>내보낸 파일(BACKSTAGE-날짜.json)은 다운로드 폴더에 저장돼요 — 파일 앱에서 iCloud Drive로 옮겨두면 안전해요. 불러오기를 하면 현재 데이터가 백업 파일 내용으로 교체돼요.</div>
-      <ConfirmBtn label="예시 데이터로 초기화" onConfirm={() => { exportBackup(d); setD(seedData()); show("자동 백업 후 예시 데이터를 불러왔어요"); }} style={{ width: "100%", marginBottom: 9 }} />
-      <ConfirmBtn label="모든 데이터 비우기" onConfirm={() => { exportBackup(d); setD(emptyData()); show("자동 백업 후 모두 비웠어요"); }} style={{ width: "100%" }} />
-      <div style={{ fontSize: 12, color: C.faint, marginTop: 12, lineHeight: 1.55 }}>초기화 전에 자동으로 백업 파일이 먼저 저장돼요. 악보 파일 자체는 저장할 수 없어 링크 보관 방식을 써요.</div>
+      <div style={{ fontSize: 12, color: C.faint, margin: "2px 0 18px", lineHeight: 1.6 }}>백업은 항상 같은 이름(BACKSTAGE.json)으로 다운로드 폴더에 저장돼요 — 파일 앱에서 iCloud Drive로 옮겨두면 안전해요. 불러오기를 하면 현재 데이터가 백업 파일 내용으로 교체돼요.</div>
     </Sheet>
   );
 }
@@ -1618,7 +1623,6 @@ function SheetRouter({ sheet }) {
     case "record": return <RecordSheet init={init} />;
     case "task": return <TaskSheet init={init} />;
     case "block": return <BlockSheet init={init} />;
-    case "score": return <ScoreSheet init={init} />;
     case "journal": return <JournalSheet init={init} />;
     case "txn": return <TxnSheet init={init} />;
     case "settings": return <SettingsSheet />;
@@ -1632,9 +1636,9 @@ function Header() {
     ? { t: "저장 실패—백업 필요", c: C.red }
     : saveState === "saved"
       ? { t: "저장됨", c: C.teal }
-      : { t: "저장 중", c: C.faint };
+      : { t: "저장 안 됨", c: C.red };
   return (
-    <header style={{ position: "sticky", top: 0, zIndex: 30, backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", background: "rgba(11,11,14,0.82)", borderBottom: `1px solid ${C.line}` }}>
+    <header style={{ position: "sticky", top: 0, zIndex: 30, backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", background: "rgba(11,11,14,0.82)", borderBottom: `1px solid ${C.line}`, paddingTop: "max(env(safe-area-inset-top), 8px)" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 18px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
           <div style={{ width: 27, height: 27, borderRadius: 9, background: "linear-gradient(135deg, #E7BB54, #B8862E)", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -1642,13 +1646,10 @@ function Header() {
           </div>
           <div style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: "0.26em", color: C.gold }}>BACKSTAGE</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-          <button onClick={() => open({ k: "settings" })} style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: "none", padding: "6px 6px" }}>
-            <div style={{ width: 6, height: 6, borderRadius: "50%", background: sv.c, flexShrink: 0 }} />
-            <span style={{ fontSize: 10.5, fontWeight: 800, color: sv.c, whiteSpace: "nowrap" }}>{sv.t}</span>
-          </button>
-          <button className="ib" onClick={() => open({ k: "settings" })}><Settings size={19} color={C.dim} /></button>
-        </div>
+        <button onClick={() => open({ k: "settings" })} style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: "none", padding: "6px 4px" }}>
+          <div style={{ width: 6, height: 6, borderRadius: "50%", background: sv.c, flexShrink: 0 }} />
+          <span style={{ fontSize: 10.5, fontWeight: 800, color: sv.c, whiteSpace: "nowrap" }}>{sv.t}</span>
+        </button>
       </div>
     </header>
   );
@@ -1663,6 +1664,7 @@ const NAV = [
 ];
 
 function Nav({ tab, setTab }) {
+  const { open } = useApp();
   return (
     <nav style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 520, zIndex: 35, background: "rgba(13,13,17,0.9)", backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)", borderTop: `1px solid ${C.line}`, display: "flex", padding: "7px 6px calc(9px + env(safe-area-inset-bottom))" }}>
       {NAV.map(({ k, l, I }) => {
@@ -1674,6 +1676,10 @@ function Nav({ tab, setTab }) {
           </button>
         );
       })}
+      <button onClick={() => open({ k: "settings" })} style={{ flex: 1, background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "6px 0" }}>
+        <Settings size={21} color={C.faint} strokeWidth={2} />
+        <span style={{ fontSize: 10.5, fontWeight: 800, color: C.faint }}>설정</span>
+      </button>
     </nav>
   );
 }
@@ -1708,7 +1714,7 @@ function App() {
         const raw = await store.get(KEY);
         if (raw) loaded = JSON.parse(raw);
       } catch (err) { /* 첫 실행 */ }
-      if (alive) setD(loaded || seedData());
+      if (alive) setD(loaded ? normalizeBackup(loaded) : seedData());
     })();
     return () => { alive = false; };
   }, []);
