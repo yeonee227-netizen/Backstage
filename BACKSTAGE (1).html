@@ -1,0 +1,1866 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="BACKSTAGE" />
+<meta name="theme-color" content="#0C0B08" />
+<title>BACKSTAGE — 나의 음악 비서</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Noto+Serif+KR:wght@500;600&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: #0C0B08; min-height: 100%; }
+  #root { min-height: 100dvh; }
+  .boot { min-height: 100dvh; display: flex; align-items: center; justify-content: center; color: #E9BE58; font-family: -apple-system, "Apple SD Gothic Neo", sans-serif; font-size: 12px; font-weight: 800; letter-spacing: 0.3em; }
+</style>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+</head>
+<body>
+<div id="root"><div class="boot">BACKSTAGE</div></div>
+<script type="text/babel" data-presets="react">
+/* ═══════ BACKSTAGE — 독립 실행형 (외부 라이브러리 불필요) ═══════ */
+const { useState, useEffect, useRef, useMemo, createContext, useContext } = React;
+
+/* 저장 어댑터: 아티팩트(window.storage) → 브라우저(localStorage) → 메모리 순으로 자동 선택 */
+const store = {
+  mem: {},
+  async get(k) {
+    try { if (window.storage && window.storage.get) { const r = await window.storage.get(k); if (r && r.value !== undefined) return r.value; } } catch (e) {}
+    try { const v = localStorage.getItem(k); if (v !== null) return v; } catch (e) {}
+    return this.mem[k] !== undefined ? this.mem[k] : null;
+  },
+  async set(k, v) {
+    try { if (window.storage && window.storage.set) { const r = await window.storage.set(k, v); if (r) return true; } } catch (e) {}
+    try { localStorage.setItem(k, v); if (localStorage.getItem(k) === v) return true; } catch (e) {}
+    this.mem[k] = v;
+    return false;
+  },
+};
+
+/* 백업 파일 내보내기: 항상 동일한 이름(BACKSTAGE.json)으로 저장 */
+const exportBackup = (data) => {
+  const name = "BACKSTAGE.json";
+  try {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 900);
+  } catch (e) {}
+  return name;
+};
+
+/* ───── 아이콘 (내장 SVG) ───── */
+const Svg = ({ size = 24, color = "currentColor", strokeWidth = 2, style, children }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" style={style} aria-hidden="true">{children}</svg>
+);
+const Home = (p) => <Svg {...p}><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.7V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.7" /><path d="M9.5 21v-5.5h5V21" /></Svg>;
+const CalendarDays = (p) => <Svg {...p}><rect x="3" y="4" width="18" height="17" rx="2.5" /><path d="M3 9.5h18" /><path d="M8 2.5V6M16 2.5V6" /><path d="M8 13.5h.01M12 13.5h.01M16 13.5h.01M8 17h.01M12 17h.01" /></Svg>;
+const GraduationCap = (p) => <Svg {...p}><path d="M22 9 12 4 2 9l10 5 10-5z" /><path d="M6 11.8V16c0 1.6 2.7 3 6 3s6-1.4 6-3v-4.2" /><path d="M22 9v5" /></Svg>;
+const Music4 = (p) => <Svg {...p}><path d="M9 18V5.5L21 3v12.5" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="15.5" r="3" /></Svg>;
+const Music = (p) => <Svg {...p}><path d="M9 18V5.5L21 3v12.5" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="15.5" r="3" /></Svg>;
+const Wallet = (p) => <Svg {...p}><rect x="2.5" y="5.5" width="19" height="15" rx="3" /><path d="M2.5 10h19" /><path d="M15.5 15.2h3" /></Svg>;
+const Settings = (p) => <Svg {...p}><circle cx="12" cy="12" r="3.2" /><path d="M12 2.6v2.8M12 18.6v2.8M2.6 12h2.8M18.6 12h2.8M5.4 5.4l2 2M16.6 16.6l2 2M18.6 5.4l-2 2M7.4 16.6l-2 2" /></Svg>;
+const Plus = (p) => <Svg {...p}><path d="M12 5v14M5 12h14" /></Svg>;
+const X = (p) => <Svg {...p}><path d="M18 6 6 18M6 6l12 12" /></Svg>;
+const ChevronLeft = (p) => <Svg {...p}><path d="m15 18-6-6 6-6" /></Svg>;
+const ChevronRight = (p) => <Svg {...p}><path d="m9 18 6-6-6-6" /></Svg>;
+const Clock = (p) => <Svg {...p}><circle cx="12" cy="12" r="9.5" /><path d="M12 7v5l3.5 2" /></Svg>;
+const MapPin = (p) => <Svg {...p}><path d="M12 21.5S5 15.8 5 10.5a7 7 0 0 1 14 0c0 5.3-7 11-7 11z" /><circle cx="12" cy="10.5" r="2.5" /></Svg>;
+const Trash2 = (p) => <Svg {...p}><path d="M3 6.5h18" /><path d="M8 6.5v-2A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5v2" /><path d="M6 6.5 7 20a2 2 0 0 0 2 1.8h6A2 2 0 0 0 17 20l1-13.5" /><path d="M10 11v6M14 11v6" /></Svg>;
+const Pencil = (p) => <Svg {...p}><path d="M17 3.5 20.5 7 8 19.5l-4.5 1 1-4.5L17 3.5z" /></Svg>;
+const Copy = (p) => <Svg {...p}><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15h-.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" /></Svg>;
+const Phone = (p) => <Svg {...p}><path d="M6.5 3h3L11 7.5l-2 1.5a13 13 0 0 0 6 6l1.5-2 4.5 1.5v3a2.5 2.5 0 0 1-2.5 2.5A15.5 15.5 0 0 1 4 5.5 2.5 2.5 0 0 1 6.5 3z" /></Svg>;
+const Search = (p) => <Svg {...p}><circle cx="11" cy="11" r="7.5" /><path d="m21 21-4.8-4.8" /></Svg>;
+const ExternalLink = (p) => <Svg {...p}><path d="M18 13.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5.5" /><path d="M15 3h6v6" /><path d="M10.5 13.5 21 3" /></Svg>;
+const CheckCircle2 = (p) => <Svg {...p}><circle cx="12" cy="12" r="9.5" /><path d="m8.2 12.3 2.6 2.6 5-5.8" /></Svg>;
+const Circle = (p) => <Svg {...p}><circle cx="12" cy="12" r="9.5" /></Svg>;
+const ArrowUp = (p) => <Svg {...p}><path d="M12 19V5" /><path d="m5.5 11.5 6.5-6.5 6.5 6.5" /></Svg>;
+const ArrowDown = (p) => <Svg {...p}><path d="M12 5v14" /><path d="m5.5 12.5 6.5 6.5 6.5-6.5" /></Svg>;
+const Quote = (p) => <Svg {...p}><path d="M9.5 5.5h-3a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2H9c-.2 2-1.2 3.2-3 4" /><path d="M20 5.5h-3a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h2.5c-.2 2-1.2 3.2-3 4" /></Svg>;
+const AlertCircle = (p) => <Svg {...p}><circle cx="12" cy="12" r="9.5" /><path d="M12 7.5V13" /><path d="M12 16.5h.01" /></Svg>;
+const TrendingUp = (p) => <Svg {...p}><path d="m22 7-8.5 8.5-5-5L2 17" /><path d="M16 7h6v6" /></Svg>;
+const TrendingDown = (p) => <Svg {...p}><path d="m22 17-8.5-8.5-5 5L2 7" /><path d="M16 17h6v-6" /></Svg>;
+const CalendarPlus = (p) => <Svg {...p}><rect x="3" y="4" width="18" height="17" rx="2.5" /><path d="M3 9.5h18" /><path d="M8 2.5V6M16 2.5V6" /><path d="M12 12.2v5.6M9.2 15h5.6" /></Svg>;
+const List = (p) => <Svg {...p}><path d="M8 6h13M8 12h13M8 18h13" /><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01" /></Svg>;
+const FileText = (p) => <Svg {...p}><path d="M14 2.5H6.5A1.5 1.5 0 0 0 5 4v16a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 20V8z" /><path d="M14 2.5V8h5" /><path d="M9 12.5h6M9 16h6" /></Svg>;
+const Target = (p) => <Svg {...p}><circle cx="12" cy="12" r="9.5" /><circle cx="12" cy="12" r="5.8" /><circle cx="12" cy="12" r="2" /></Svg>;
+
+
+/* ───────────── 팔레트 · 상수 ───────────── */
+const C = {
+  bg: "#0C0B08", card: "#16140E", card2: "#211E14", line: "#2B2820", line2: "#3C3727",
+  text: "#F5F1E4", dim: "#A09884", faint: "#6E6754",
+  gold: "#E9BE58", goldBg: "rgba(233,190,88,0.10)",
+  red: "#E56B57", redBg: "rgba(229,107,87,0.12)",
+  teal: "#4CC9A6", tealBg: "rgba(76,201,166,0.12)",
+  violet: "#9E86E8", blue: "#5FA2F0", pink: "#E27AA5", orange: "#EC9A52", green: "#84C46C", gray: "#8B8B95",
+};
+const PALETTE = [C.gold, C.red, C.teal, C.violet, C.blue, C.pink, C.orange, C.green, C.gray];
+const FONT = `"Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif`;
+const SERIF = `"Noto Serif KR", Georgia, "Times New Roman", serif`;
+const DISP = `"Bebas Neue", "Pretendard Variable", Pretendard, sans-serif`;
+const WK = ["일", "월", "화", "수", "목", "금", "토"];
+const WKEN = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+const VENUE_STATUS = ["연락예정", "연락중", "확정", "보류", "거절"];
+const VSC = { 연락예정: C.gray, 연락중: C.blue, 확정: C.teal, 보류: C.gold, 거절: C.red };
+const ATT = { 출석: C.teal, 보강: C.gold, 결석: C.red };
+const KEY = "backstage-v1";
+
+/* ───────────── 유틸 ───────────── */
+const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
+const pad = (n) => String(n).padStart(2, "0");
+const keyOf = (dt) => `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+const todayKey = () => keyOf(new Date());
+const parseKey = (k) => { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); };
+const fmtKo = (k) => { if (!k) return ""; const d = parseKey(k); return `${d.getMonth() + 1}/${d.getDate()} (${WK[d.getDay()]})`; };
+const ddays = (k) => Math.round((parseKey(k) - parseKey(todayKey())) / 86400000);
+const won = (n) => `${(n || 0).toLocaleString()}원`;
+const wonShort = (n) => { n = n || 0; return n >= 10000 ? `${(n / 10000).toLocaleString(undefined, { maximumFractionDigits: 1 })}만원` : `${n.toLocaleString()}원`; };
+const parseNum = (v) => Number(String(v || "").replace(/[^\d]/g, "")) || 0;
+const fmtNum = (v) => { const n = String(v || "").replace(/[^\d]/g, ""); return n ? Number(n).toLocaleString() : ""; };
+const shiftM = (c, d) => { const dt = new Date(c.y, c.m + d, 1); return { y: dt.getFullYear(), m: dt.getMonth() }; };
+const nowYM = () => { const n = new Date(); return { y: n.getFullYear(), m: n.getMonth() }; };
+const byDT = (a, b) => (a.date === b.date ? (a.time || "").localeCompare(b.time || "") : a.date.localeCompare(b.date));
+const repShift = (dateKey, kind, i) => {
+  const d0 = parseKey(dateKey);
+  if (kind === "매주") return keyOf(new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() + 7 * i));
+  if (kind === "2주마다") return keyOf(new Date(d0.getFullYear(), d0.getMonth(), d0.getDate() + 14 * i));
+  if (kind === "매월") {
+    const day = d0.getDate();
+    const t = new Date(d0.getFullYear(), d0.getMonth() + i, 1);
+    const last = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
+    return keyOf(new Date(t.getFullYear(), t.getMonth(), Math.min(day, last)));
+  }
+  return dateKey;
+};
+const sumLab = { fontSize: 11, fontWeight: 800, color: C.faint, marginBottom: 5 };
+const sumVal = (c) => ({ fontSize: 15.5, fontWeight: 800, color: c || C.text, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.01em" });
+
+/* ───────────── 기본 설정 · 시드 데이터 ───────────── */
+const defaultSettings = () => ({
+  userName: "",
+  autoLedger: true,
+  values: [
+    { id: uid(), text: "그루브가 테크닉보다 먼저다." },
+    { id: uid(), text: "무대 위의 나는 연습실의 평균값이다." },
+    { id: uid(), text: "잘 듣는 사람이 잘 연주한다. 음악은 대화다." },
+  ],
+  eventTypes: [
+    { id: "t_gig", name: "긱", color: C.red, perf: true },
+    { id: "t_show", name: "공연", color: C.gold, perf: true },
+    { id: "t_lesson", name: "레슨", color: C.teal, perf: false },
+    { id: "t_rec", name: "녹음", color: C.violet, perf: false },
+    { id: "t_reh", name: "합주", color: C.blue, perf: false },
+    { id: "t_etc", name: "기타", color: C.gray, perf: false },
+  ],
+  incomeCats: ["연주", "레슨", "녹음", "기타수입"],
+  expenseCats: ["장비", "교통", "식비", "스튜디오", "교육", "생활", "기타"],
+  journalKinds: [
+    { id: "jk_log", name: "일지", color: C.blue },
+    { id: "jk_insight", name: "깨달음", color: C.gold },
+    { id: "jk_idea", name: "아이디어", color: C.violet },
+  ],
+  pracNames: { tasks: "과제", routine: "루틴", journal: "일지" },
+  homeWidgets: { stats: true, values: true, unpaid: true, today: true, todo: true },
+});
+
+const emptyData = () => ({
+  settings: defaultSettings(), events: [], todos: [], students: [], tasks: [],
+  routine: [], routineChecks: {}, scores: [], venues: [], transactions: [], journal: [],
+});
+
+/* 백업 파일 복원 시 누락 필드 보정 */
+function normalizeBackup(obj) {
+  const base = emptyData();
+  const out = { ...base, ...obj };
+  out.settings = { ...base.settings, ...(obj && obj.settings ? obj.settings : {}) };
+  ["values", "eventTypes", "incomeCats", "expenseCats", "journalKinds"].forEach((k) => {
+    if (!Array.isArray(out.settings[k]) || !out.settings[k].length) out.settings[k] = base.settings[k];
+  });
+  if (!out.settings.homeWidgets || typeof out.settings.homeWidgets !== "object") out.settings.homeWidgets = base.settings.homeWidgets;
+  if (!out.settings.pracNames || typeof out.settings.pracNames !== "object") out.settings.pracNames = base.settings.pracNames;
+  ["events", "todos", "students", "tasks", "routine", "scores", "venues", "transactions", "journal"].forEach((k) => {
+    if (!Array.isArray(out[k])) out[k] = [];
+  });
+  if (!out.routineChecks || typeof out.routineChecks !== "object") out.routineChecks = {};
+  return out;
+}
+
+const pracNamesOf = (s) => {
+  const p = (s && s.pracNames) || {};
+  return { tasks: p.tasks || "과제", routine: p.routine || "루틴", journal: p.journal || "일지" };
+};
+
+function seedData() {
+  const base = emptyData();
+  const t = new Date();
+  const k = (off) => keyOf(new Date(t.getFullYear(), t.getMonth(), t.getDate() + off));
+  const events = [
+    { id: uid(), title: "재즈 트리오", typeId: "t_gig", date: k(2), time: "20:00", venue: "클럽 문라이즈", fee: 150000, paid: false, paidDate: "", memo: "2세트 · 스탠다드 위주" },
+    { id: uid(), title: "성인 취미반 레슨", typeId: "t_lesson", date: k(1), time: "14:00", venue: "연습실 A", fee: 50000, paid: false, paidDate: "", memo: "" },
+    { id: uid(), title: "밴드 합주", typeId: "t_reh", date: k(0), time: "19:00", venue: "사운드웨이브", fee: 0, paid: false, paidDate: "", memo: "신곡 2곡 맞추기" },
+    { id: uid(), title: "단독 공연", typeId: "t_show", date: k(-4), time: "19:30", venue: "홍대 라이브홀", fee: 200000, paid: true, paidDate: k(-2), memo: "" },
+    { id: uid(), title: "앨범 세션", typeId: "t_rec", date: k(9), time: "13:00", venue: "머쉬룸 스튜디오", fee: 300000, paid: false, paidDate: "", memo: "4곡 · 차트 미리 받기" },
+  ];
+  const students = [
+    { id: uid(), name: "지훈", info: "수 17:00", contact: "010-0000-0000", memo: "고등학생 · 밴드부", records: [
+      { id: uid(), date: k(-7), status: "출석", progress: "8비트 응용 패턴 4번까지", feedback: "하이햇 오픈 타이밍이 좋아짐. 필인에서 급해지는 습관 체크." },
+      { id: uid(), date: k(0), status: "출석", progress: "16비트 기초 진입", feedback: "고스트 노트 볼륨 조절 과제로." },
+    ] },
+    { id: uid(), name: "서연", info: "토 11:00", contact: "", memo: "취미 성인반", records: [
+      { id: uid(), date: k(-5), status: "보강", progress: "모엘러 주법 2단계", feedback: "손목 힘 빼는 감각이 좋아짐." },
+    ] },
+  ];
+  const tasks = [
+    { id: uid(), title: "Groove Essentials 12번", pos: "패턴 8까지", progress: 60, memo: "메트로놈 90 → 100", done: false },
+    { id: uid(), title: "더블 스트로크 180bpm", pos: "현재 160bpm", progress: 45, memo: "", done: false },
+    { id: uid(), title: "Rosanna 하프타임 셔플 카피", pos: "브릿지 전까지", progress: 80, memo: "고스트 노트 디테일 살리기", done: false },
+  ];
+  const routine = [
+    { id: uid(), label: "워밍업 · 스틱 컨트롤", min: 20, color: C.gold },
+    { id: uid(), label: "루디먼츠", min: 30, color: C.teal },
+    { id: uid(), label: "곡 카피 · 차트", min: 40, color: C.violet },
+    { id: uid(), label: "즉흥 · 크리에이티브", min: 20, color: C.red },
+  ];
+  const venues = [
+    { id: uid(), name: "클럽 문라이즈", person: "김실장", contact: "02-000-0000", status: "확정", last: k(-2), memo: "이번 달 둘째 주 트리오 확정" },
+    { id: uid(), name: "블루룸 재즈살롱", person: "", contact: "", status: "연락중", last: k(-1), memo: "다음 달 라인업 회신 대기" },
+    { id: uid(), name: "스틸노트 문래", person: "박대표", contact: "", status: "연락예정", last: "", memo: "인스타 DM으로 먼저 컨택" },
+  ];
+  const transactions = [
+    { id: uid(), date: k(-2), type: "수입", category: "연주", amount: 200000, memo: "단독 공연 · 홍대 라이브홀", eventId: events[3].id },
+    { id: uid(), date: k(-3), type: "지출", category: "장비", amount: 18000, memo: "스틱 3켤레" },
+    { id: uid(), date: k(-1), type: "지출", category: "교통", amount: 12400, memo: "" },
+  ];
+  const journal = [
+    { id: uid(), date: k(-1), kind: "깨달음", title: "고스트 노트의 볼륨", content: "고스트 노트는 '작게'가 아니라 '메인 노트와의 거리'다. 그 차이가 클수록 그루브가 깊어진다. 볼륨 3단계 연습을 루틴에 추가할 것." },
+  ];
+  const todos = [
+    { id: uid(), text: "문라이즈 셋리스트 보내기", done: false },
+    { id: uid(), text: "심벌 펠트 교체", done: false },
+  ];
+  return { ...base, events, students, tasks, routine, venues, transactions, journal, todos };
+}
+
+/* ───────────── 전역 스타일 ───────────── */
+const CSS = `
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: ${C.bg}; }
+::-webkit-scrollbar { width: 0; height: 0; }
+input, textarea, select, button { font-family: inherit; }
+button { cursor: pointer; }
+.inp { width: 100%; background: ${C.card2}; border: 1px solid ${C.line2}; border-radius: 13px; color: ${C.text}; padding: 12px 14px; font-size: 16px; outline: none; }
+.inp::placeholder { color: ${C.faint}; }
+.inp:focus { border-color: ${C.gold}; box-shadow: 0 0 0 3px rgba(233,190,88,0.13); }
+textarea.inp { resize: none; line-height: 1.6; }
+.ib { background: none; border: none; padding: 8px; border-radius: 10px; display: flex; align-items: center; justify-content: center; }
+.ib:active { background: rgba(255,255,255,0.07); }
+.press { transition: transform .12s ease; }
+.press:active { transform: scale(0.98); }
+input[type="date"], input[type="time"] { color-scheme: dark; -webkit-appearance: none; appearance: none; min-height: 47px; }
+input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border-radius: 3px; background: ${C.line2}; outline: none; padding: 0; }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%; background: ${C.gold}; border: 4px solid ${C.card}; box-shadow: 0 1px 8px rgba(0,0,0,.55); }
+@keyframes up { from { transform: translateY(48px); opacity: .3; } to { transform: translateY(0); opacity: 1; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes toastIn { from { transform: translate(-50%, 12px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes eq { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1); } }
+@media (prefers-reduced-motion: reduce) { * { animation-duration: .01s !important; transition-duration: .01s !important; } }
+`;
+
+/* ───────────── 컨텍스트 ───────────── */
+const Ctx = createContext(null);
+const useApp = () => useContext(Ctx);
+
+/* ───────────── 공용 UI ───────────── */
+function Lab({ children }) { return <div style={{ fontSize: 12, fontWeight: 700, color: C.dim, marginBottom: 7 }}>{children}</div>; }
+function Fld({ label, children, style }) { return <div style={{ marginBottom: 15, ...style }}><Lab>{label}</Lab>{children}</div>; }
+
+function SecLabel({ children, right }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "26px 2px 11px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ width: 3, height: 11, borderRadius: 1.5, background: C.gold, opacity: 0.85, flexShrink: 0 }} />
+        <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: "0.15em", color: C.faint }}>{children}</div>
+      </div>
+      {right}
+    </div>
+  );
+}
+
+function Card({ children, style, onClick }) {
+  return <div className={onClick ? "press" : ""} onClick={onClick} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 18, padding: 16, ...style }}>{children}</div>;
+}
+
+function Chip({ on, children, onClick, color }) {
+  const c = color || C.gold;
+  return (
+    <button className="press" onClick={onClick} style={{ padding: "8px 13px", borderRadius: 100, fontSize: 13, fontWeight: 700, border: `1px solid ${on ? c : C.line2}`, background: on ? `${c}20` : "transparent", color: on ? c : C.dim, whiteSpace: "nowrap", flexShrink: 0 }}>{children}</button>
+  );
+}
+
+function Seg({ opts, val, onChange }) {
+  return (
+    <div style={{ display: "flex", background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 4, gap: 3 }}>
+      {opts.map((o) => (
+        <button key={o} onClick={() => onChange(o)} style={{ flex: 1, padding: "10px 2px", borderRadius: 11, fontSize: 13.5, fontWeight: 800, border: "none", background: val === o ? C.gold : "transparent", color: val === o ? "#191305" : C.dim, boxShadow: val === o ? "0 2px 12px rgba(233,190,88,0.28)" : "none", transition: "all .15s" }}>{o}</button>
+      ))}
+    </div>
+  );
+}
+
+function Btn({ children, onClick, kind = "p", style, disabled }) {
+  const base = { border: "none", borderRadius: 14, padding: "14px 18px", fontSize: 15, fontWeight: 800, opacity: disabled ? 0.45 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 };
+  const k = kind === "p"
+    ? { background: C.gold, color: "#17130A" }
+    : kind === "d"
+      ? { background: C.redBg, color: C.red, border: `1px solid rgba(229,107,87,0.35)` }
+      : { background: "transparent", color: C.dim, border: `1px solid ${C.line2}` };
+  return <button className="press" disabled={disabled} onClick={onClick} style={{ ...base, ...k, ...style }}>{children}</button>;
+}
+
+function Toggle({ on, onChange, small }) {
+  const w = small ? 42 : 48, h = small ? 25 : 28, dot = h - 6;
+  return (
+    <button onClick={() => onChange(!on)} style={{ width: w, height: h, borderRadius: 100, border: "none", background: on ? C.gold : C.line2, position: "relative", transition: "background .18s", flexShrink: 0, padding: 0 }}>
+      <div style={{ position: "absolute", top: 3, left: on ? w - dot - 3 : 3, width: dot, height: dot, borderRadius: "50%", background: on ? "#17130A" : C.dim, transition: "left .18s" }} />
+    </button>
+  );
+}
+
+function Bar({ v, color, h = 7 }) {
+  const pct = Math.min(100, Math.max(0, v));
+  const n = 22;
+  const lit = Math.round((pct / 100) * n);
+  return (
+    <div style={{ display: "flex", gap: 2, height: h, alignItems: "stretch" }}>
+      {Array.from({ length: n }, (_, i) => (
+        <div key={i} style={{ flex: 1, borderRadius: 1.5, background: i < lit ? (color || C.gold) : C.line, opacity: i < lit ? 0.45 + 0.55 * ((i + 1) / n) : 1, transition: "background .25s" }} />
+      ))}
+    </div>
+  );
+}
+
+function Empty({ Icon, title, sub }) {
+  return (
+    <div style={{ textAlign: "center", padding: "52px 20px 40px" }}>
+      <div style={{ width: 58, height: 58, borderRadius: 18, background: "rgba(255,255,255,0.015)", border: `1.5px dashed ${C.line2}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 15px" }}>
+        <Icon size={25} color={C.faint} />
+      </div>
+      <div style={{ fontSize: 15.5, fontWeight: 800, marginBottom: 6 }}>{title}</div>
+      {sub && <div style={{ fontSize: 13, color: C.faint, lineHeight: 1.55 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function TypeBadge({ type }) {
+  if (!type) return null;
+  return <span style={{ fontSize: 11, fontWeight: 800, color: type.color, background: `${type.color}1E`, padding: "3px 9px", borderRadius: 100, flexShrink: 0 }}>{type.name}</span>;
+}
+
+function ConfirmBtn({ label = "삭제", onConfirm, style }) {
+  const [arm, setArm] = useState(false);
+  useEffect(() => { if (!arm) return; const t = setTimeout(() => setArm(false), 2600); return () => clearTimeout(t); }, [arm]);
+  return <Btn kind="d" style={{ flex: 1, ...style }} onClick={() => { if (arm) { setArm(false); onConfirm(); } else setArm(true); }}>{arm ? "한 번 더 누르면 실행" : label}</Btn>;
+}
+
+function FAB({ onClick }) {
+  return (
+    <button className="press" onClick={onClick} style={{ position: "fixed", zIndex: 40, bottom: 96, right: "max(18px, calc(50vw - 242px))", width: 56, height: 56, borderRadius: 18, border: "none", background: "linear-gradient(150deg, #F0CA6B, #D9A73C)", boxShadow: "0 10px 26px rgba(233,190,88,0.35), inset 0 1px 0 rgba(255,255,255,0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <Plus size={26} color="#17130A" strokeWidth={2.6} />
+    </button>
+  );
+}
+
+function Sheet({ title, children, footer, full }) {
+  const { close } = useApp();
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={close} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.64)", animation: "fade .2s ease" }} />
+      <div style={{ position: "relative", width: "100%", maxWidth: 520, maxHeight: full ? "93dvh" : "88dvh", background: "#14120B", border: `1px solid ${C.line2}`, borderBottom: "none", borderRadius: "26px 26px 0 0", display: "flex", flexDirection: "column", animation: "up .3s cubic-bezier(.2,.9,.3,1)" }}>
+        <div style={{ padding: "11px 20px 0", flexShrink: 0 }}>
+          <div style={{ width: 42, height: 4.5, borderRadius: 3, background: C.line2, margin: "0 auto 13px" }} />
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+            <div style={{ fontSize: 18, fontWeight: 800 }}>{title}</div>
+            <button className="ib" onClick={close} style={{ marginRight: -8 }}><X size={20} color={C.dim} /></button>
+          </div>
+        </div>
+        <div style={{ overflowY: "auto", padding: "12px 20px 22px", flex: 1 }}>{children}</div>
+        {footer && <div style={{ padding: "12px 20px calc(15px + env(safe-area-inset-bottom))", borderTop: `1px dashed ${C.line2}`, display: "flex", gap: 10, flexShrink: 0 }}>{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+function Toast({ msg }) {
+  return <div style={{ position: "fixed", bottom: 104, left: "50%", transform: "translateX(-50%)", zIndex: 90, background: "#262217", border: `1px solid ${C.line2}`, color: C.text, padding: "12px 21px", borderRadius: 100, fontSize: 13.5, fontWeight: 700, whiteSpace: "nowrap", boxShadow: "0 10px 32px rgba(0,0,0,0.55)", animation: "toastIn .25s ease" }}>{msg}</div>;
+}
+
+function MonthNav({ cur, setCur }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center" }}>
+      <button className="ib" onClick={() => setCur(shiftM(cur, -1))}><ChevronLeft size={20} color={C.dim} /></button>
+      <div style={{ fontFamily: DISP, fontSize: 20, letterSpacing: "0.06em", minWidth: 104, textAlign: "center", lineHeight: 1, paddingTop: 2 }}>{cur.y}.{pad(cur.m + 1)}</div>
+      <button className="ib" onClick={() => setCur(shiftM(cur, 1))}><ChevronRight size={20} color={C.dim} /></button>
+    </div>
+  );
+}
+
+function TabTitle({ title, sub }) {
+  return (
+    <div style={{ margin: "24px 2px 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ width: 4, height: 19, borderRadius: 2, background: C.gold, boxShadow: "0 0 12px rgba(233,190,88,0.45)", flexShrink: 0 }} />
+        <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-0.02em" }}>{title}</div>
+      </div>
+      {sub && <div style={{ fontSize: 13, color: C.dim, marginTop: 6, marginLeft: 14 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function StatCard({ label, val, tint, onClick }) {
+  return (
+    <Card onClick={onClick} style={{ padding: "13px 12px" }}>
+      <div style={{ fontSize: 10.5, color: C.faint, fontWeight: 800, marginBottom: 7, letterSpacing: "0.05em" }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 800, color: tint || C.text, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap", letterSpacing: "-0.01em" }}>{val}</div>
+    </Card>
+  );
+}
+
+function MoneyInp({ value, onChange, placeholder }) {
+  return (
+    <div style={{ position: "relative" }}>
+      <input className="inp" inputMode="numeric" placeholder={placeholder || "0"} value={value} onChange={(e) => onChange(fmtNum(e.target.value))} style={{ paddingRight: 40, fontVariantNumeric: "tabular-nums" }} />
+      <span style={{ position: "absolute", right: 15, top: "50%", transform: "translateY(-50%)", color: C.dim, fontSize: 14, fontWeight: 700 }}>원</span>
+    </div>
+  );
+}
+
+/* ───────────── 이벤트 카드 (티켓) ───────────── */
+function EventCard({ ev, showDate }) {
+  const { d, open } = useApp();
+  const type = d.settings.eventTypes.find((t) => t.id === ev.typeId);
+  const tc = (type && type.color) || C.gray;
+  const dd = ddays(ev.date);
+  const ddLabel = showDate ? (dd === 0 ? " · 오늘" : dd === 1 ? " · 내일" : dd > 1 ? ` · D-${dd}` : "") : "";
+  return (
+    <div className="press" onClick={() => open({ k: "event", init: { id: ev.id } })} style={{ display: "flex", alignItems: "stretch", background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, marginBottom: 9, overflow: "hidden", cursor: "pointer" }}>
+      <div style={{ width: 4, background: tc, flexShrink: 0, boxShadow: `1px 0 10px ${tc}40` }} />
+      <div style={{ flex: 1, minWidth: 0, padding: "13px 14px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 5 }}>
+          <span style={{ fontSize: 15.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.title}</span>
+          <TypeBadge type={type} />
+        </div>
+        <div style={{ fontSize: 12.5, color: C.dim, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          {showDate && <span style={{ fontWeight: 700, color: dd === 0 ? C.gold : C.dim }}>{fmtKo(ev.date)}{ddLabel}</span>}
+          {ev.time && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Clock size={11} color={C.faint} /><span style={{ fontFamily: DISP, fontSize: 13.5, letterSpacing: "0.05em", color: C.text, lineHeight: 1, paddingTop: 1 }}>{ev.time}</span></span>}
+          {ev.venue && <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><MapPin size={11} />{ev.venue}</span>}
+        </div>
+      </div>
+      {ev.fee > 0 && (
+        <div style={{ flexShrink: 0, borderLeft: `1px dashed ${C.line2}`, padding: "10px 13px", display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "center", gap: 5, background: "rgba(255,255,255,0.012)" }}>
+          <div style={{ fontSize: 13.5, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{won(ev.fee)}</div>
+          <div style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: "0.05em", color: ev.paid ? C.teal : C.red, border: `1px solid ${ev.paid ? "rgba(76,201,166,0.4)" : "rgba(229,107,87,0.4)"}`, padding: "2px 6px", borderRadius: 5, transform: "rotate(-2deg)" }}>{ev.paid ? "입금완료" : "미입금"}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ───────────── 홈 ───────────── */
+function HomeTab() {
+  const { d, setTab, open } = useApp();
+  const w = d.settings.homeWidgets || {};
+  const on = (k) => w[k] !== false;
+  const tk = todayKey();
+  const now = new Date();
+  const hour = now.getHours();
+  const greet = hour < 5 ? "늦은 밤의 리듬 속에서" : hour < 11 ? "좋은 아침이에요" : hour < 17 ? "오늘도 그루브하게" : hour < 22 ? "무대 뒤, 준비됐나요" : "오늘 하루도 수고했어요";
+  const name = (d.settings.userName || "").trim();
+  const dateStr = `${now.getMonth() + 1}월 ${now.getDate()}일 ${WK[now.getDay()]}요일`;
+  const [qi, setQi] = useState(() => Math.floor(Math.random() * 100));
+  const vals = d.settings.values;
+  const quote = vals.length ? vals[qi % vals.length] : null;
+  const todayEvs = d.events.filter((e) => e.date === tk).slice().sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+  const upcoming = d.events.filter((e) => e.date > tk).slice().sort(byDT).slice(0, 4);
+  const ym = tk.slice(0, 7);
+  const perfIds = d.settings.eventTypes.filter((t) => t.perf).map((t) => t.id);
+  const perfCount = d.events.filter((e) => e.date.startsWith(ym) && perfIds.includes(e.typeId)).length;
+  const income = d.transactions.filter((t) => t.type === "수입" && t.date.startsWith(ym)).reduce((s, t) => s + t.amount, 0);
+  const unpaid = d.events.filter((e) => e.fee > 0 && !e.paid && e.date <= tk);
+  const unpaidSum = unpaid.reduce((s, e) => s + e.fee, 0);
+  const nextStage = d.events.filter((e) => perfIds.includes(e.typeId) && e.date >= tk).slice().sort(byDT)[0] || null;
+  const todayList = todayEvs.filter((e) => !nextStage || e.id !== nextStage.id);
+  const upcomingList = upcoming.filter((e) => !nextStage || e.id !== nextStage.id).slice(0, 3);
+  const nsDD = nextStage ? ddays(nextStage.date) : 0;
+  return (
+    <>
+      <div style={{ margin: "26px 2px 0" }}>
+        <div style={{ fontFamily: DISP, fontSize: 15, letterSpacing: "0.2em", color: C.gold, marginBottom: 8 }}>{pad(now.getMonth() + 1)}.{pad(now.getDate())} {WKEN[now.getDay()]}</div>
+        <div style={{ fontSize: 23, fontWeight: 800, lineHeight: 1.32, letterSpacing: "-0.02em" }}>{name ? `${name}님, ` : ""}{greet}</div>
+      </div>
+      {nextStage && (
+        <div className="press" onClick={() => open({ k: "event", init: { id: nextStage.id } })} style={{ marginTop: 16, position: "relative", overflow: "hidden", borderRadius: 20, border: "1px solid rgba(233,190,88,0.3)", background: `radial-gradient(130% 170% at 18% -30%, rgba(233,190,88,0.2), rgba(233,190,88,0.04) 48%, rgba(0,0,0,0) 75%), ${C.card}`, padding: "15px 17px 14px", cursor: "pointer" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 9 }}>
+            <div style={{ fontFamily: DISP, fontSize: 12.5, letterSpacing: "0.26em", color: C.gold }}>NEXT STAGE</div>
+            <div style={{ fontFamily: DISP, fontSize: 24, letterSpacing: "0.05em", color: C.gold, lineHeight: 0.9, textShadow: "0 0 18px rgba(233,190,88,0.45)" }}>{nsDD === 0 ? "TODAY" : `D-${nsDD}`}</div>
+          </div>
+          <div style={{ fontSize: 17.5, fontWeight: 800, marginBottom: 6 }}>{nextStage.title}</div>
+          <div style={{ fontSize: 12.5, color: C.dim, display: "flex", gap: 11, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontWeight: 700 }}>{fmtKo(nextStage.date)}</span>
+            {nextStage.time && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Clock size={11} color={C.faint} /><span style={{ fontFamily: DISP, fontSize: 13.5, letterSpacing: "0.05em", color: C.text, lineHeight: 1, paddingTop: 1 }}>{nextStage.time}</span></span>}
+            {nextStage.venue && <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><MapPin size={11} />{nextStage.venue}</span>}
+          </div>
+        </div>
+      )}
+      {on("stats") && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 9, marginTop: 12 }}>
+          <StatCard label="이번 달 연주" val={`${perfCount}회`} onClick={() => setTab("cal")} />
+          <StatCard label="이번 달 입금" val={wonShort(income)} tint={C.teal} onClick={() => setTab("money")} />
+          <StatCard label="미입금" val={wonShort(unpaidSum)} tint={unpaidSum > 0 ? C.red : C.faint} onClick={() => setTab("money")} />
+        </div>
+      )}
+      {on("values") && quote && (
+        <div className="press" onClick={() => setQi((i) => i + 1)} style={{ marginTop: 14, position: "relative", borderRadius: 20, border: "1px solid rgba(233,190,88,0.26)", background: "linear-gradient(140deg, rgba(233,190,88,0.13), rgba(233,190,88,0.03) 55%, rgba(0,0,0,0))", padding: "20px 20px 16px" }}>
+          <div style={{ position: "absolute", top: -8, left: "50%", transform: "translateX(-50%) rotate(-2.5deg)", width: 76, height: 17, background: "rgba(233,190,88,0.14)", border: "1px solid rgba(233,190,88,0.18)", borderRadius: 2 }} />
+          <Quote size={16} color={C.gold} style={{ marginBottom: 9, opacity: 0.9 }} />
+          <div style={{ fontFamily: SERIF, fontSize: 16.5, lineHeight: 1.62, fontWeight: 600, color: "#F7F0DC" }}>{quote.text}</div>
+          <div style={{ marginTop: 11, fontSize: 10.5, color: C.faint, fontWeight: 800, letterSpacing: "0.08em" }}>나의 음악 가치관 · 탭해서 다음 문장</div>
+        </div>
+      )}
+      {on("unpaid") && unpaid.length > 0 && (
+        <div className="press" onClick={() => setTab("money")} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 11, background: C.redBg, border: "1px solid rgba(229,107,87,0.3)", borderRadius: 16, padding: "13px 15px" }}>
+          <AlertCircle size={18} color={C.red} style={{ flexShrink: 0 }} />
+          <div style={{ flex: 1, fontSize: 13.5, fontWeight: 700, color: "#F2C2B8" }}>입금 확인이 필요해요 · {unpaid.length}건 · {won(unpaidSum)}</div>
+          <ChevronRight size={16} color={C.red} />
+        </div>
+      )}
+      {on("today") && (
+        <>
+          {(todayList.length > 0 || todayEvs.length === 0) && (
+            <>
+              <SecLabel right={<button onClick={() => setTab("cal")} style={{ background: "none", border: "none", color: C.faint, fontSize: 12, fontWeight: 800, padding: 4 }}>캘린더 →</button>}>오늘의 일정</SecLabel>
+              {todayList.length ? todayList.map((e) => <EventCard key={e.id} ev={e} />) : (
+                <Card style={{ display: "flex", alignItems: "center", gap: 13, color: C.dim, fontSize: 13.5, lineHeight: 1.5 }}>
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 16, flexShrink: 0 }}>
+                    {[0, 1, 2, 3].map((i) => <div key={i} style={{ width: 3, height: 15, borderRadius: 1.5, background: C.gold, opacity: 0.85, transformOrigin: "bottom", animation: `eq ${(1.1 + i * 0.25).toFixed(2)}s ease-in-out ${(i * 0.14).toFixed(2)}s infinite` }} />)}
+                  </div>
+                  <span>오늘은 일정이 없어요. 연습하기 좋은 날이에요.</span>
+                </Card>
+              )}
+            </>
+          )}
+          {upcomingList.length > 0 && (
+            <>
+              <SecLabel>다가오는 일정</SecLabel>
+              {upcomingList.map((e) => <EventCard key={e.id} ev={e} showDate />)}
+            </>
+          )}
+        </>
+      )}
+      {on("todo") && <TodoWidget />}
+    </>
+  );
+}
+
+function TodoWidget() {
+  const { d, setD } = useApp();
+  const [txt, setTxt] = useState("");
+  const [showDone, setShowDone] = useState(false);
+  const add = () => { const t = txt.trim(); if (!t) return; setD((s) => ({ ...s, todos: [{ id: uid(), text: t, done: false }, ...s.todos] })); setTxt(""); };
+  const toggle = (id) => setD((s) => ({ ...s, todos: s.todos.map((t) => (t.id === id ? { ...t, done: !t.done } : t)) }));
+  const del = (id) => setD((s) => ({ ...s, todos: s.todos.filter((t) => t.id !== id) }));
+  const act = d.todos.filter((t) => !t.done);
+  const done = d.todos.filter((t) => t.done);
+  const row = (t) => (
+    <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: `1px solid ${C.line}` }}>
+      <button className="ib" style={{ padding: 2 }} onClick={() => toggle(t.id)}>
+        {t.done ? <CheckCircle2 size={20} color={C.teal} /> : <Circle size={20} color={C.line2} />}
+      </button>
+      <div style={{ flex: 1, fontSize: 14.5, fontWeight: 600, color: t.done ? C.faint : C.text, textDecoration: t.done ? "line-through" : "none" }}>{t.text}</div>
+      <button className="ib" style={{ padding: 4 }} onClick={() => del(t.id)}><X size={15} color={C.faint} /></button>
+    </div>
+  );
+  return (
+    <>
+      <SecLabel>TO-DO</SecLabel>
+      <Card style={{ padding: "4px 15px 6px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0" }}>
+          <input className="inp" style={{ background: "transparent", border: "none", padding: "8px 2px", boxShadow: "none" }} placeholder="할 일 추가..." value={txt} onChange={(e) => setTxt(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} />
+          <button className="ib" onClick={add}><Plus size={20} color={C.gold} /></button>
+        </div>
+        {act.map(row)}
+        {done.length > 0 && (
+          <>
+            <div style={{ borderTop: `1px solid ${C.line}` }}>
+              <button onClick={() => setShowDone(!showDone)} style={{ background: "none", border: "none", color: C.faint, fontSize: 12.5, fontWeight: 800, padding: "11px 0" }}>완료 {done.length}개 {showDone ? "접기" : "보기"}</button>
+            </div>
+            {showDone && done.map(row)}
+          </>
+        )}
+      </Card>
+    </>
+  );
+}
+
+/* ───────────── 일정 탭 (캘린더 + 베뉴 섭외) ───────────── */
+function ScheduleTab() {
+  const [seg, setSeg] = useState("캘린더");
+  return (
+    <>
+      <TabTitle title="일정" sub="섭외부터 입금까지, 한 흐름으로" />
+      <Seg opts={["캘린더", "베뉴 섭외"]} val={seg} onChange={setSeg} />
+      {seg === "캘린더" ? <CalendarView /> : <VenueView />}
+    </>
+  );
+}
+
+function CalendarView() {
+  const { d, open } = useApp();
+  const [cur, setCur] = useState(nowYM);
+  const [sel, setSel] = useState(todayKey);
+  const [mode, setMode] = useState("월");
+  const tk = todayKey();
+  const changeMonth = (c) => {
+    setCur(c);
+    const mk = `${c.y}-${pad(c.m + 1)}`;
+    if (!sel.startsWith(mk)) setSel(tk.startsWith(mk) ? tk : `${mk}-01`);
+  };
+  const evByDate = useMemo(() => { const m = {}; d.events.forEach((e) => { (m[e.date] = m[e.date] || []).push(e); }); return m; }, [d.events]);
+  const dayEvs = (evByDate[sel] || []).slice().sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+  const upcoming = useMemo(() => d.events.filter((e) => e.date >= tk).slice().sort(byDT), [d.events, tk]);
+  const upDates = [...new Set(upcoming.map((e) => e.date))];
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "16px 0 4px" }}>
+        {mode === "월" ? <MonthNav cur={cur} setCur={changeMonth} /> : <div style={{ fontSize: 16.5, fontWeight: 800, padding: "0 6px" }}>다가오는 일정</div>}
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button className="press" onClick={() => open({ k: "extract" })} style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 12px", borderRadius: 100, border: "1px solid rgba(233,190,88,0.35)", background: C.goldBg, color: C.gold, fontSize: 12, fontWeight: 800 }}>
+            <Copy size={12} />연주일정 추출
+          </button>
+          <button className="ib" onClick={() => setMode(mode === "월" ? "목록" : "월")}>{mode === "월" ? <List size={19} color={C.dim} /> : <CalendarDays size={19} color={C.dim} />}</button>
+        </div>
+      </div>
+      {mode === "월" ? (
+        <>
+          <MonthGrid cur={cur} evByDate={evByDate} sel={sel} setSel={setSel} types={d.settings.eventTypes} />
+          <SecLabel right={<button onClick={() => open({ k: "event", init: { date: sel } })} style={{ background: "none", border: "none", color: C.gold, fontSize: 12.5, fontWeight: 800, padding: 4 }}>+ 이 날에 추가</button>}>{fmtKo(sel)} 일정</SecLabel>
+          {dayEvs.length ? dayEvs.map((e) => <EventCard key={e.id} ev={e} />) : <div style={{ color: C.faint, fontSize: 13.5, padding: "8px 4px 4px" }}>일정이 없어요.</div>}
+        </>
+      ) : (
+        <div style={{ marginTop: 4 }}>
+          {upDates.length ? upDates.map((dk) => (
+            <div key={dk}>
+              <div style={{ fontSize: 12.5, fontWeight: 800, color: dk === tk ? C.gold : C.dim, margin: "16px 2px 8px" }}>
+                {fmtKo(dk)}{dk === tk ? " · 오늘" : ddays(dk) === 1 ? " · 내일" : ` · D-${ddays(dk)}`}
+              </div>
+              {upcoming.filter((e) => e.date === dk).map((e) => <EventCard key={e.id} ev={e} />)}
+            </div>
+          )) : <Empty Icon={CalendarDays} title="다가오는 일정이 없어요" sub="+ 버튼으로 첫 일정을 추가해 보세요" />}
+        </div>
+      )}
+      <FAB onClick={() => open({ k: "event", init: { date: mode === "월" ? sel : tk } })} />
+    </>
+  );
+}
+
+function MonthGrid({ cur, evByDate, sel, setSel, types }) {
+  const startDow = new Date(cur.y, cur.m, 1).getDay();
+  const days = new Date(cur.y, cur.m + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startDow; i++) cells.push(null);
+  for (let i = 1; i <= days; i++) cells.push(i);
+  while (cells.length % 7 !== 0) cells.push(null);
+  const tk = todayKey();
+  const tById = {};
+  types.forEach((t) => { tById[t.id] = t; });
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 3 }}>
+        {WK.map((w, i) => <div key={w} style={{ textAlign: "center", fontSize: 11.5, fontWeight: 800, color: i === 0 ? "#D98070" : i === 6 ? "#83A9E4" : C.faint, padding: "7px 0" }}>{w}</div>)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", rowGap: 2 }}>
+        {cells.map((day, i) => {
+          if (!day) return <div key={i} style={{ height: 49 }} />;
+          const key = `${cur.y}-${pad(cur.m + 1)}-${pad(day)}`;
+          const evs = evByDate[key] || [];
+          const isSel = sel === key;
+          const isToday = tk === key;
+          return (
+            <button key={i} onClick={() => setSel(key)} style={{ height: 49, border: "none", background: "transparent", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, paddingTop: 4 }}>
+              <div style={{ width: 30, height: 30, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13.5, fontWeight: isSel || isToday ? 800 : 600, background: isSel ? C.gold : "transparent", color: isSel ? "#17130A" : isToday ? C.gold : C.text, border: isToday && !isSel ? "1.5px solid rgba(233,190,88,0.55)" : "none", boxShadow: isSel ? "0 4px 14px rgba(233,190,88,0.28)" : "none" }}>{day}</div>
+              <div style={{ display: "flex", gap: 2.5, height: 5, alignItems: "center" }}>
+                {evs.slice(0, 3).map((e, j) => <div key={j} style={{ width: 5, height: 5, borderRadius: 1.5, background: (tById[e.typeId] && tById[e.typeId].color) || C.gray }} />)}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function VenueView() {
+  const { d, open } = useApp();
+  const [f, setF] = useState("전체");
+  const list = d.venues.filter((v) => f === "전체" || v.status === f);
+  return (
+    <>
+      <div style={{ display: "flex", gap: 7, overflowX: "auto", padding: "15px 0 8px" }}>
+        {["전체", ...VENUE_STATUS].map((s) => {
+          const n = s === "전체" ? d.venues.length : d.venues.filter((v) => v.status === s).length;
+          return <Chip key={s} on={f === s} color={s === "전체" ? undefined : VSC[s]} onClick={() => setF(s)}>{s} {n}</Chip>;
+        })}
+      </div>
+      <div style={{ marginTop: 4 }}>
+        {list.length ? list.map((v) => <VenueCard key={v.id} v={v} />) : <Empty Icon={MapPin} title="베뉴가 없어요" sub="섭외할 공연장 · 클럽을 등록하고 연락 상태를 관리해요" />}
+      </div>
+      <FAB onClick={() => open({ k: "venue" })} />
+    </>
+  );
+}
+
+function VenueCard({ v }) {
+  const { open } = useApp();
+  return (
+    <Card onClick={() => open({ k: "venue", init: { id: v.id } })} style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ fontSize: 16, fontWeight: 800 }}>{v.name}</div>
+        <span style={{ fontSize: 11.5, fontWeight: 800, color: VSC[v.status], background: `${VSC[v.status]}1E`, padding: "4px 10px", borderRadius: 100, flexShrink: 0 }}>{v.status}</span>
+      </div>
+      {(v.person || v.contact) && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8, fontSize: 13, color: C.dim, flexWrap: "wrap" }}>
+          {v.person && <span style={{ fontWeight: 700 }}>{v.person}</span>}
+          {v.contact && (
+            <a href={`tel:${v.contact}`} onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", gap: 5, color: C.blue, textDecoration: "none", fontWeight: 700 }}>
+              <Phone size={12} />{v.contact}
+            </a>
+          )}
+        </div>
+      )}
+      {v.last && <div style={{ fontSize: 12, color: C.faint, marginTop: 6 }}>마지막 연락 · {fmtKo(v.last)}</div>}
+      {v.memo && <div style={{ fontSize: 13, color: C.dim, marginTop: 7, lineHeight: 1.5 }}>{v.memo}</div>}
+      {v.status === "확정" && (
+        <button className="press" onClick={(e) => { e.stopPropagation(); open({ k: "event", init: { venue: v.name } }); }} style={{ marginTop: 12, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "11px 0", borderRadius: 12, border: "1px solid rgba(233,190,88,0.35)", background: C.goldBg, color: C.gold, fontSize: 13, fontWeight: 800 }}>
+          <CalendarPlus size={14} />이 베뉴로 일정 만들기
+        </button>
+      )}
+    </Card>
+  );
+}
+
+/* ───────────── 레슨 탭 ───────────── */
+function LessonsTab() {
+  const { d, open } = useApp();
+  const [sid, setSid] = useState(null);
+  const st = sid ? d.students.find((s) => s.id === sid) : null;
+  useEffect(() => { if (sid && !st) setSid(null); }, [sid, st]);
+  if (st) return <StudentDetail st={st} back={() => setSid(null)} />;
+  return (
+    <>
+      <TabTitle title="레슨" sub={d.students.length ? `레슨생 ${d.students.length}명 · 카드를 눌러 진도와 기록을 확인해요` : "레슨생을 등록하고 진도 · 출석 · 피드백을 기록해요"} />
+      {d.students.length ? d.students.map((s) => <StudentCard key={s.id} s={s} onClick={() => setSid(s.id)} />) : <Empty Icon={GraduationCap} title="아직 레슨생이 없어요" sub="+ 버튼으로 첫 레슨생을 등록해 보세요" />}
+      <FAB onClick={() => open({ k: "student" })} />
+    </>
+  );
+}
+
+function StudentCard({ s, onClick }) {
+  const recs = s.records.slice().sort((a, b) => b.date.localeCompare(a.date));
+  const last = recs[0];
+  return (
+    <Card onClick={onClick} style={{ display: "flex", alignItems: "center", gap: 13, marginBottom: 10 }}>
+      <div style={{ width: 44, height: 44, borderRadius: 15, background: C.goldBg, border: "1px solid rgba(233,190,88,0.3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 800, color: C.gold, flexShrink: 0 }}>{s.name.slice(0, 1)}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 15.5, fontWeight: 800 }}>{s.name}</span>
+          {s.info && <span style={{ fontSize: 12, color: C.dim, fontWeight: 700 }}>{s.info}</span>}
+        </div>
+        <div style={{ fontSize: 12.5, color: C.dim, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {last ? `진도 · ${last.progress || "기록 없음"}` : "아직 레슨 기록이 없어요"}
+        </div>
+      </div>
+      <div style={{ fontSize: 12, fontWeight: 800, color: C.faint, flexShrink: 0 }}>{s.records.length}회</div>
+    </Card>
+  );
+}
+
+function StudentDetail({ st, back }) {
+  const { setD, open } = useApp();
+  const recs = st.records.slice().sort((a, b) => b.date.localeCompare(a.date));
+  const cnt = (k) => st.records.filter((r) => r.status === k).length;
+  const delRec = (rid) => setD((s) => ({ ...s, students: s.students.map((x) => (x.id === st.id ? { ...x, records: x.records.filter((r) => r.id !== rid) } : x)) }));
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "18px 0 6px", marginLeft: -10 }}>
+        <button className="ib" onClick={back}><ChevronLeft size={22} color={C.dim} /></button>
+        <div style={{ flex: 1, fontSize: 21, fontWeight: 800 }}>{st.name}</div>
+        <button className="ib" onClick={() => open({ k: "student", init: { id: st.id } })}><Pencil size={17} color={C.dim} /></button>
+      </div>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", margin: "0 2px 14px", fontSize: 13, color: C.dim }}>
+        {st.info && <span style={{ fontWeight: 700 }}>{st.info}</span>}
+        {st.contact && <a href={`tel:${st.contact}`} style={{ display: "inline-flex", alignItems: "center", gap: 4, color: C.blue, textDecoration: "none", fontWeight: 700 }}><Phone size={12} />{st.contact}</a>}
+        {st.memo && <span>{st.memo}</span>}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 9 }}>
+        <StatCard label="출석" val={`${cnt("출석")}회`} tint={C.teal} />
+        <StatCard label="보강" val={`${cnt("보강")}회`} tint={C.gold} />
+        <StatCard label="결석" val={`${cnt("결석")}회`} tint={C.red} />
+      </div>
+      {recs[0] && recs[0].progress ? (
+        <div style={{ marginTop: 12, borderRadius: 18, border: "1px solid rgba(233,190,88,0.3)", background: C.goldBg, padding: "14px 16px" }}>
+          <div style={{ fontSize: 10.5, fontWeight: 800, color: C.gold, letterSpacing: "0.12em", marginBottom: 6 }}>현재 진도</div>
+          <div style={{ fontSize: 15.5, fontWeight: 700, lineHeight: 1.45 }}>{recs[0].progress}</div>
+        </div>
+      ) : null}
+      <SecLabel right={<button onClick={() => open({ k: "record", init: { studentId: st.id } })} style={{ background: "none", border: "none", color: C.gold, fontSize: 12.5, fontWeight: 800, padding: 4 }}>+ 레슨 기록</button>}>레슨 기록</SecLabel>
+      {recs.length ? recs.map((r) => (
+        <Card key={r.id} style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 800, color: C.dim }}>{fmtKo(r.date)}</span>
+            <span style={{ fontSize: 11, fontWeight: 800, color: ATT[r.status], background: `${ATT[r.status]}1E`, padding: "3px 9px", borderRadius: 100 }}>{r.status}</span>
+            <div style={{ flex: 1 }} />
+            <button className="ib" style={{ padding: 5 }} onClick={() => open({ k: "record", init: { studentId: st.id, id: r.id } })}><Pencil size={14} color={C.faint} /></button>
+            <button className="ib" style={{ padding: 5 }} onClick={() => delRec(r.id)}><Trash2 size={14} color={C.faint} /></button>
+          </div>
+          {r.progress && <div style={{ fontSize: 14.5, fontWeight: 700, marginTop: 9 }}>{r.progress}</div>}
+          {r.feedback && <div style={{ fontSize: 13.5, color: C.dim, marginTop: 6, lineHeight: 1.55 }}>{r.feedback}</div>}
+        </Card>
+      )) : <div style={{ color: C.faint, fontSize: 13.5, padding: "6px 4px" }}>첫 레슨 기록을 추가해 보세요.</div>}
+      <FAB onClick={() => open({ k: "record", init: { studentId: st.id } })} />
+    </>
+  );
+}
+
+/* ───────────── 연습 탭 ───────────── */
+function PracticeTab() {
+  const { d } = useApp();
+  const P = pracNamesOf(d.settings);
+  const keys = ["tasks", "routine", "journal"];
+  const labels = keys.map((k) => P[k]);
+  const [segK, setSegK] = useState("tasks");
+  return (
+    <>
+      <TabTitle title="연습" sub={`${P.tasks} · ${P.routine} · ${P.journal}`} />
+      <Seg opts={labels} val={P[segK]} onChange={(l) => setSegK(keys[labels.indexOf(l)] || "tasks")} />
+      {segK === "tasks" && <TasksView />}
+      {segK === "routine" && <RoutineView />}
+      {segK === "journal" && <JournalView />}
+    </>
+  );
+}
+
+function TasksView() {
+  const { d, setD, open } = useApp();
+  const [showDone, setShowDone] = useState(false);
+  const act = d.tasks.filter((t) => !t.done);
+  const done = d.tasks.filter((t) => t.done);
+  const toggle = (id) => setD((s) => ({ ...s, tasks: s.tasks.map((t) => (t.id === id ? { ...t, done: !t.done } : t)) }));
+  const row = (t) => (
+    <Card key={t.id} onClick={() => open({ k: "task", init: { id: t.id } })} style={{ marginBottom: 10, opacity: t.done ? 0.55 : 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+        <button className="ib" style={{ padding: 2, marginLeft: -2 }} onClick={(e) => { e.stopPropagation(); toggle(t.id); }}>
+          {t.done ? <CheckCircle2 size={22} color={C.teal} /> : <Circle size={22} color={C.line2} />}
+        </button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, textDecoration: t.done ? "line-through" : "none" }}>{t.title}</div>
+          {t.pos && <div style={{ fontSize: 12.5, color: C.gold, fontWeight: 700, marginTop: 3 }}>▸ {t.pos}</div>}
+        </div>
+      </div>
+      {t.memo && <div style={{ fontSize: 12.5, color: C.faint, marginTop: 8, lineHeight: 1.5 }}>{t.memo}</div>}
+    </Card>
+  );
+  return (
+    <>
+      <div style={{ marginTop: 16 }}>
+        {act.length ? act.map(row) : <Empty Icon={Target} title="진행 중인 과제가 없어요" sub="+ 버튼으로 연습 과제를 추가하고 현재 위치를 기록해요" />}
+        {done.length > 0 && (
+          <>
+            <button onClick={() => setShowDone(!showDone)} style={{ background: "none", border: "none", color: C.faint, fontSize: 12.5, fontWeight: 800, padding: "8px 2px" }}>완료한 과제 {done.length}개 {showDone ? "접기" : "보기"}</button>
+            {showDone && done.map(row)}
+          </>
+        )}
+      </div>
+      <FAB onClick={() => open({ k: "task" })} />
+    </>
+  );
+}
+
+function RoutineView() {
+  const { d, setD, open } = useApp();
+  const tk = todayKey();
+  const checks = d.routineChecks[tk] || [];
+  const total = d.routine.reduce((s, b) => s + (b.min || 0), 0);
+  const toggle = (id) => setD((s) => {
+    const cur = s.routineChecks[tk] || [];
+    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+    return { ...s, routineChecks: { ...s.routineChecks, [tk]: next } };
+  });
+  const move = (i, dir) => setD((s) => {
+    const arr = s.routine.slice();
+    const j = i + dir;
+    if (j < 0 || j >= arr.length) return s;
+    const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+    return { ...s, routine: arr };
+  });
+  const last7 = Array.from({ length: 7 }, (_, i) => keyOf(new Date(Date.now() - (6 - i) * 86400000)));
+  return (
+    <>
+      <div style={{ marginTop: 16 }}>
+        {d.routine.length ? (
+          <Card>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 13 }}>
+              <div style={{ fontSize: 15.5, fontWeight: 800 }}>오늘의 {pracNamesOf(d.settings).routine}</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: checks.length === d.routine.length ? C.teal : C.gold }}>{checks.length}/{d.routine.length} · 총 {total}분</div>
+            </div>
+            <div style={{ display: "flex", height: 18, gap: 3 }}>
+              {d.routine.map((b) => <div key={b.id} style={{ flex: Math.max(b.min || 1, 1), background: b.color, opacity: checks.includes(b.id) ? 1 : 0.22, transition: "opacity .25s, box-shadow .25s", borderRadius: 5, boxShadow: checks.includes(b.id) ? `0 0 12px ${b.color}55` : "none" }} />)}
+            </div>
+            <div style={{ marginTop: 6 }}>
+              {d.routine.map((b, i) => (
+                <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 0", borderBottom: i < d.routine.length - 1 ? `1px solid ${C.line}` : "none" }}>
+                  <button className="ib" style={{ padding: 2 }} onClick={() => toggle(b.id)}>
+                    {checks.includes(b.id) ? <CheckCircle2 size={21} color={b.color} /> : <Circle size={21} color={C.line2} />}
+                  </button>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14.5, fontWeight: 700, color: checks.includes(b.id) ? C.dim : C.text, textDecoration: checks.includes(b.id) ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.label}</div>
+                    <div style={{ fontSize: 11.5, color: C.faint, fontWeight: 700, marginTop: 2 }}>{b.min}분</div>
+                  </div>
+                  <button className="ib" style={{ padding: 4 }} onClick={() => move(i, -1)}><ArrowUp size={14} color={C.faint} /></button>
+                  <button className="ib" style={{ padding: 4 }} onClick={() => move(i, 1)}><ArrowDown size={14} color={C.faint} /></button>
+                  <button className="ib" style={{ padding: 4 }} onClick={() => open({ k: "block", init: { id: b.id } })}><Pencil size={14} color={C.faint} /></button>
+                </div>
+              ))}
+            </div>
+          </Card>
+        ) : <Empty Icon={Music4} title="루틴이 비어 있어요" sub="+ 버튼으로 연습 블록을 추가하면 비율 그래프로 보여드려요" />}
+        {d.routine.length > 0 && (
+          <>
+            <SecLabel>최근 7일</SecLabel>
+            <Card style={{ display: "flex", justifyContent: "space-between", padding: "14px 18px" }}>
+              {last7.map((dk) => {
+                const c = (d.routineChecks[dk] || []).length;
+                const r = d.routine.length ? c / d.routine.length : 0;
+                const dt = parseKey(dk);
+                return (
+                  <div key={dk} style={{ textAlign: "center" }}>
+                    <div style={{ width: 27, height: 27, borderRadius: 9, margin: "0 auto", background: r > 0 ? C.gold : C.card2, opacity: r > 0 ? 0.3 + r * 0.7 : 1, border: dk === tk ? `2px solid ${C.gold}` : `1px solid ${C.line}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color: r > 0.99 ? "#17130A" : C.faint }}>{r > 0.99 ? "✓" : ""}</div>
+                    <div style={{ fontSize: 10.5, color: dk === tk ? C.gold : C.faint, fontWeight: 800, marginTop: 5 }}>{WK[dt.getDay()]}</div>
+                  </div>
+                );
+              })}
+            </Card>
+          </>
+        )}
+      </div>
+      <FAB onClick={() => open({ k: "block" })} />
+    </>
+  );
+}
+
+function JournalView() {
+  const { d, open } = useApp();
+  const [f, setF] = useState("전체");
+  const kinds = d.settings.journalKinds || [];
+  const colorOf = (name) => { const k = kinds.find((x) => x.name === name); return k ? k.color : C.gray; };
+  const list = d.journal.filter((j) => f === "전체" || j.kind === f).slice().sort((a, b) => b.date.localeCompare(a.date));
+  return (
+    <>
+      <div style={{ display: "flex", gap: 7, marginTop: 16, overflowX: "auto", paddingBottom: 2 }}>
+        {["전체", ...kinds.map((x) => x.name)].map((k) => <Chip key={k} on={f === k} color={k === "전체" ? undefined : colorOf(k)} onClick={() => setF(k)}>{k}</Chip>)}
+      </div>
+      <div style={{ marginTop: 12 }}>
+        {list.length ? list.map((j) => (
+          <Card key={j.id} onClick={() => open({ k: "journal", init: { id: j.id } })} style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+              <span style={{ fontSize: 12.5, fontWeight: 800, color: C.dim }}>{fmtKo(j.date)}</span>
+              <span style={{ fontSize: 11, fontWeight: 800, color: colorOf(j.kind), background: `${colorOf(j.kind)}1E`, padding: "3px 9px", borderRadius: 100 }}>{j.kind}</span>
+            </div>
+            {j.title && <div style={{ fontSize: 15.5, fontWeight: 800, marginBottom: 5 }}>{j.title}</div>}
+            <div style={{ fontSize: 13.5, color: C.dim, lineHeight: 1.6, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{j.content}</div>
+          </Card>
+        )) : <Empty Icon={FileText} title="아직 기록이 없어요" sub="연습 중 깨달은 것, 공연의 감각을 짧게라도 남겨 보세요" />}
+      </div>
+      <FAB onClick={() => open({ k: "journal" })} />
+    </>
+  );
+}
+
+/* ───────────── 머니 탭 ───────────── */
+function MoneyTab() {
+  const [seg, setSeg] = useState("입금 확인");
+  return (
+    <>
+      <TabTitle title="머니" sub="음악 일의 돈 흐름을 한곳에서" />
+      <Seg opts={["입금 확인", "가계부"]} val={seg} onChange={setSeg} />
+      {seg === "입금 확인" ? <PaymentsView /> : <LedgerView />}
+    </>
+  );
+}
+
+function PaymentsView() {
+  const { d, togglePaid, open } = useApp();
+  const [cur, setCur] = useState(nowYM);
+  const [f, setF] = useState("전체");
+  const mk = `${cur.y}-${pad(cur.m + 1)}`;
+  const evs = d.events.filter((e) => e.fee > 0 && e.date.startsWith(mk)).slice().sort(byDT);
+  const tot = evs.reduce((s, e) => s + e.fee, 0);
+  const paidS = evs.filter((e) => e.paid).reduce((s, e) => s + e.fee, 0);
+  const list = evs.filter((e) => f === "전체" || (f === "미입금" ? !e.paid : e.paid));
+  const tById = {};
+  d.settings.eventTypes.forEach((t) => { tById[t.id] = t; });
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 14 }}><MonthNav cur={cur} setCur={setCur} /></div>
+      <Card style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginTop: 8, padding: "15px 12px", textAlign: "center" }}>
+        <div><div style={sumLab}>예정</div><div style={sumVal()}>{wonShort(tot)}</div></div>
+        <div style={{ borderLeft: `1px solid ${C.line}`, borderRight: `1px solid ${C.line}` }}><div style={sumLab}>입금완료</div><div style={sumVal(C.teal)}>{wonShort(paidS)}</div></div>
+        <div><div style={sumLab}>미입금</div><div style={sumVal(tot - paidS > 0 ? C.red : C.text)}>{wonShort(tot - paidS)}</div></div>
+      </Card>
+      <div style={{ display: "flex", gap: 7, margin: "13px 0 10px" }}>
+        {["전체", "미입금", "입금완료"].map((k) => <Chip key={k} on={f === k} color={k === "미입금" ? C.red : k === "입금완료" ? C.teal : undefined} onClick={() => setF(k)}>{k}</Chip>)}
+      </div>
+      {list.length ? list.map((e) => {
+        const type = tById[e.typeId];
+        return (
+          <Card key={e.id} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 9, padding: "13px 15px" }}>
+            <div onClick={() => open({ k: "event", init: { id: e.id } })} style={{ flex: 1, minWidth: 0, cursor: "pointer" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span style={{ fontSize: 14.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.title}</span>
+                <TypeBadge type={type} />
+              </div>
+              <div style={{ fontSize: 12, color: C.dim, marginTop: 4 }}>{fmtKo(e.date)}{e.venue ? ` · ${e.venue}` : ""}</div>
+            </div>
+            <div style={{ textAlign: "right", flexShrink: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 800, fontVariantNumeric: "tabular-nums", marginBottom: 6 }}>{won(e.fee)}</div>
+              <Toggle small on={!!e.paid} onChange={(v) => togglePaid(e.id, v)} />
+            </div>
+          </Card>
+        );
+      }) : <div style={{ color: C.faint, fontSize: 13.5, padding: "12px 4px" }}>이 달에는 해당하는 페이 일정이 없어요.</div>}
+      <div style={{ fontSize: 12, color: C.faint, padding: "6px 4px 0", lineHeight: 1.5 }}>일정에 페이를 입력하면 자동으로 이 목록에 올라오고, 토글을 켜면 입금 처리돼요.</div>
+    </>
+  );
+}
+
+function LedgerView() {
+  const { d, open } = useApp();
+  const [cur, setCur] = useState(nowYM);
+  const mk = `${cur.y}-${pad(cur.m + 1)}`;
+  const txs = d.transactions.filter((t) => t.date.startsWith(mk)).slice().sort((a, b) => b.date.localeCompare(a.date));
+  const inc = txs.filter((t) => t.type === "수입").reduce((s, t) => s + t.amount, 0);
+  const exp = txs.filter((t) => t.type === "지출").reduce((s, t) => s + t.amount, 0);
+  const net = inc - exp;
+  const dates = [...new Set(txs.map((t) => t.date))];
+  const cats = {};
+  txs.filter((t) => t.type === "지출").forEach((t) => { cats[t.category] = (cats[t.category] || 0) + t.amount; });
+  const catList = Object.entries(cats).sort((a, b) => b[1] - a[1]);
+  const maxCat = catList.length ? catList[0][1] : 1;
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 14 }}><MonthNav cur={cur} setCur={setCur} /></div>
+      <Card style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginTop: 8, padding: "15px 12px", textAlign: "center" }}>
+        <div><div style={sumLab}>수입</div><div style={sumVal(C.teal)}>{wonShort(inc)}</div></div>
+        <div style={{ borderLeft: `1px solid ${C.line}`, borderRight: `1px solid ${C.line}` }}><div style={sumLab}>지출</div><div style={sumVal(C.red)}>{wonShort(exp)}</div></div>
+        <div><div style={sumLab}>합계</div><div style={sumVal(net >= 0 ? C.text : C.red)}>{net < 0 ? "-" : ""}{wonShort(Math.abs(net))}</div></div>
+      </Card>
+      {catList.length > 0 && (
+        <>
+          <SecLabel>지출 분석</SecLabel>
+          <Card>
+            {catList.slice(0, 5).map(([c, v], i) => (
+              <div key={c} style={{ marginBottom: i < Math.min(catList.length, 5) - 1 ? 12 : 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, fontWeight: 700, marginBottom: 5 }}>
+                  <span style={{ color: C.dim }}>{c}</span><span style={{ fontVariantNumeric: "tabular-nums" }}>{won(v)}</span>
+                </div>
+                <Bar v={(v / maxCat) * 100} color={C.red} h={6} />
+              </div>
+            ))}
+          </Card>
+        </>
+      )}
+      <SecLabel>내역</SecLabel>
+      {dates.length ? dates.map((dk) => (
+        <div key={dk}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: C.faint, margin: "12px 2px 7px" }}>{fmtKo(dk)}</div>
+          {txs.filter((t) => t.date === dk).map((t) => (
+            <Card key={t.id} onClick={() => open({ k: "txn", init: { id: t.id } })} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8, padding: "12px 15px" }}>
+              <div style={{ width: 36, height: 36, borderRadius: 12, background: t.type === "수입" ? C.tealBg : C.redBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                {t.type === "수입" ? <TrendingUp size={16} color={C.teal} /> : <TrendingDown size={16} color={C.red} />}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14.5, fontWeight: 700 }}>{t.category}</div>
+                {t.memo && <div style={{ fontSize: 12, color: C.faint, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.memo}</div>}
+              </div>
+              <div style={{ fontSize: 14.5, fontWeight: 800, color: t.type === "수입" ? C.teal : C.text, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{t.type === "수입" ? "+" : "-"}{won(t.amount)}</div>
+            </Card>
+          ))}
+        </div>
+      )) : <div style={{ color: C.faint, fontSize: 13.5, padding: "10px 4px" }}>이 달의 내역이 없어요. + 버튼으로 기록해 보세요.</div>}
+      <FAB onClick={() => open({ k: "txn" })} />
+    </>
+  );
+}
+
+/* ───────────── 시트: 일정 ───────────── */
+function EventSheet({ init }) {
+  const { d, setD, close, show } = useApp();
+  const editing = init && init.id ? d.events.find((e) => e.id === init.id) : null;
+  const [f, setF] = useState(() => editing
+    ? { ...editing, fee: editing.fee ? fmtNum(editing.fee) : "" }
+    : { title: "", typeId: (init && init.typeId) || d.settings.eventTypes[0].id, date: (init && init.date) || todayKey(), time: "", venue: (init && init.venue) || "", fee: "", memo: "", paid: false, repeat: "없음" });
+  const u = (p) => setF((s) => ({ ...s, ...p }));
+  const fee = parseNum(f.fee);
+  const repeating = !editing && f.repeat && f.repeat !== "없음";
+  const REPN = { "매주": 26, "2주마다": 13, "매월": 6 };
+  const repN = repeating ? (REPN[f.repeat] || 8) : 1;
+  const curType = d.settings.eventTypes.find((t) => t.id === f.typeId);
+  const isLesson = !!curType && (curType.id === "t_lesson" || (curType.name || "").includes("레슨"));
+  const feeCycle = repeating && isLesson ? (f.repeat === "매주" ? 4 : f.repeat === "2주마다" ? 2 : 1) : 1;
+  const groupCnt = editing && editing.groupId ? d.events.filter((e) => e.groupId === editing.groupId).length : 0;
+  const futureCnt = editing && editing.groupId ? d.events.filter((e) => e.groupId === editing.groupId && e.date >= editing.date).length : 0;
+  const [ask, setAsk] = useState(null);
+  const doSave = (applyFuture) => {
+    if (!f.date) return;
+    const gid = repeating ? "g" + uid() : (editing ? editing.groupId : undefined);
+    const ev = {
+      id: editing ? editing.id : uid(),
+      title: (f.title || "").trim() || "제목 없는 일정",
+      typeId: f.typeId, date: f.date, time: f.time || "",
+      venue: (f.venue || "").trim(), memo: (f.memo || "").trim(),
+      fee, paid: fee > 0 && !repeating ? !!f.paid : false,
+      paidDate: fee > 0 && !repeating && f.paid ? (editing && editing.paid && editing.paidDate ? editing.paidDate : todayKey()) : "",
+      groupId: gid,
+    };
+    const extras = [];
+    if (repeating) {
+      for (let i = 1; i < repN; i++) {
+        extras.push({ ...ev, id: uid(), date: repShift(ev.date, f.repeat, i), fee: feeCycle > 1 && i % feeCycle !== 0 ? 0 : fee });
+      }
+    }
+    setD((s) => {
+      let events;
+      if (editing) {
+        events = s.events.map((e) => {
+          if (e.id === ev.id) return ev;
+          if (applyFuture && gid && e.groupId === gid && e.date >= editing.date) {
+            const nf = e.fee > 0 ? ev.fee : e.fee;
+            return { ...e, title: ev.title, typeId: ev.typeId, time: ev.time, venue: ev.venue, memo: ev.memo, fee: nf, paid: nf > 0 ? e.paid : false, paidDate: nf > 0 ? e.paidDate : "" };
+          }
+          return e;
+        });
+      } else {
+        events = [...s.events, ev, ...extras];
+      }
+      let transactions = s.transactions.filter((t) => t.eventId !== ev.id);
+      if (ev.paid && ev.fee > 0 && s.settings.autoLedger) {
+        const type = s.settings.eventTypes.find((t) => t.id === ev.typeId);
+        const kept = s.transactions.find((t) => t.eventId === ev.id);
+        transactions = [...transactions, kept
+          ? { ...kept, amount: ev.fee, memo: ev.title + (ev.venue ? " · " + ev.venue : "") }
+          : { id: uid(), date: todayKey(), type: "수입", category: type ? (type.perf ? "연주" : type.name) : "기타수입", amount: ev.fee, memo: ev.title + (ev.venue ? " · " + ev.venue : ""), eventId: ev.id }];
+      }
+      if (applyFuture && editing && gid) {
+        const byId = {};
+        events.forEach((e) => { byId[e.id] = e; });
+        transactions = transactions
+          .map((t) => {
+            const e = t.eventId ? byId[t.eventId] : null;
+            if (e && e.groupId === gid && e.date >= editing.date && e.id !== ev.id) {
+              return { ...t, amount: e.fee, memo: e.title + (e.venue ? " · " + e.venue : "") };
+            }
+            return t;
+          })
+          .filter((t) => {
+            const e = t.eventId ? byId[t.eventId] : null;
+            return !(e && e.groupId === gid && e.date >= editing.date && e.id !== ev.id && (!e.paid || e.fee <= 0));
+          });
+      }
+      return { ...s, events, transactions };
+    });
+    close();
+    show(repeating ? `${f.repeat} 반복 일정을 추가했어요` : editing ? (applyFuture ? "이후 반복 일정까지 수정했어요" : "일정을 수정했어요") : "일정을 추가했어요");
+  };
+  const delFuture = () => {
+    const ids = d.events.filter((e) => e.groupId === editing.groupId && e.date >= editing.date).map((e) => e.id);
+    setD((s) => ({ ...s, events: s.events.filter((e) => !ids.includes(e.id)), transactions: s.transactions.filter((t) => !ids.includes(t.eventId)) }));
+    close(); show("이후 반복 일정까지 삭제했어요");
+  };
+  const delOne = () => {
+    setD((s) => ({ ...s, events: s.events.filter((e) => e.id !== editing.id), transactions: s.transactions.filter((t) => t.eventId !== editing.id) }));
+    close(); show("일정을 삭제했어요");
+  };
+  return (
+    <Sheet title={editing ? "일정 수정" : "새 일정"} footer={
+      ask === "del" ? (
+        <>
+          <Btn kind="g" style={{ flex: 0.9, padding: "14px 6px", fontSize: 13.5 }} onClick={() => setAsk(null)}>취소</Btn>
+          <Btn kind="d" style={{ flex: 1.1, padding: "14px 6px", fontSize: 13.5 }} onClick={delOne}>이 일정만</Btn>
+          <Btn kind="d" style={{ flex: 1.4, padding: "14px 6px", fontSize: 13.5 }} onClick={delFuture}>이후 반복 모두</Btn>
+        </>
+      ) : ask === "save" ? (
+        <>
+          <Btn kind="g" style={{ flex: 0.9, padding: "14px 6px", fontSize: 13.5 }} onClick={() => setAsk(null)}>취소</Btn>
+          <Btn style={{ flex: 1.1, padding: "14px 6px", fontSize: 13.5 }} onClick={() => doSave(false)}>이 일정만</Btn>
+          <Btn style={{ flex: 1.4, padding: "14px 6px", fontSize: 13.5 }} onClick={() => doSave(true)}>이후 반복에 적용</Btn>
+        </>
+      ) : (
+        <>
+          {editing && (groupCnt > 1 ? <Btn kind="d" style={{ flex: 1 }} onClick={() => setAsk("del")}>삭제</Btn> : <ConfirmBtn onConfirm={delOne} />)}
+          <Btn style={{ flex: 2 }} onClick={() => (editing && groupCnt > 1 ? setAsk("save") : doSave(false))}>저장</Btn>
+        </>
+      )
+    }>
+      <Fld label="제목"><input className="inp" placeholder="예) 재즈 트리오, 지훈 레슨" value={f.title} onChange={(e) => u({ title: e.target.value })} /></Fld>
+      <Fld label="유형">
+        <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+          {d.settings.eventTypes.map((t) => <Chip key={t.id} on={f.typeId === t.id} color={t.color} onClick={() => u({ typeId: t.id })}>{t.name}</Chip>)}
+        </div>
+      </Fld>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <Fld label="날짜"><input className="inp" type="date" value={f.date} onChange={(e) => u({ date: e.target.value })} /></Fld>
+        <Fld label="시간"><input className="inp" type="time" value={f.time} onChange={(e) => u({ time: e.target.value })} /></Fld>
+      </div>
+      {!editing && (
+        <Fld label="반복">
+          <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+            {["없음", "매주", "2주마다", "매월"].map((r) => <Chip key={r} on={f.repeat === r} onClick={() => u({ repeat: r })}>{r}</Chip>)}
+          </div>
+        </Fld>
+      )}
+      {repeating && f.date && (
+        <div style={{ fontSize: 12, color: C.faint, margin: "-6px 2px 15px", lineHeight: 1.6 }}>
+          {fmtKo(f.date)}부터 약 6개월치가 자동으로 만들어져요 (마지막 {fmtKo(repShift(f.date, f.repeat, repN - 1))}). 하나를 열어 삭제 · 수정할 때 이후 반복까지 한 번에 처리할 수 있어요.
+        </div>
+      )}
+      <Fld label="장소"><input className="inp" placeholder="베뉴 · 연습실 이름" value={f.venue} onChange={(e) => u({ venue: e.target.value })} /></Fld>
+      <Fld label={repeating && isLesson ? (feeCycle > 1 ? `레슨비 (${feeCycle}회 기준)` : "레슨비 (매회 기준)") : "페이"}>
+        <MoneyInp value={f.fee} onChange={(v) => u({ fee: v })} />
+        {repeating && isLesson && fee > 0 && (
+          <div style={{ fontSize: 12, color: C.faint, marginTop: 7, lineHeight: 1.55 }}>
+            {feeCycle > 1
+              ? `매주 레슨은 4회, 2주마다 레슨은 2회 기준이에요 — 레슨비가 ${feeCycle}회마다 각 구간의 첫 레슨에 한 번씩 입금 목록에 잡혀요.`
+              : "매월 레슨은 매회 레슨비가 입금 목록에 잡혀요."}
+          </div>
+        )}
+      </Fld>
+      {fee > 0 && !repeating && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.card2, borderRadius: 13, padding: "13px 15px", marginBottom: 15, gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>입금 완료</div>
+            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 2 }}>{d.settings.autoLedger ? "켜면 가계부에 수입으로 자동 기록돼요" : "입금 상태를 표시해요"}</div>
+          </div>
+          <Toggle on={!!f.paid} onChange={(v) => u({ paid: v })} />
+        </div>
+      )}
+      <Fld label="메모"><textarea className="inp" rows={3} placeholder="셋리스트, 준비물, 특이사항..." value={f.memo} onChange={(e) => u({ memo: e.target.value })} /></Fld>
+    </Sheet>
+  );
+}
+
+/* ───────────── 시트: 연주일정 추출 ───────────── */
+function ExtractSheet() {
+  const { d, close, show } = useApp();
+  const [cur, setCur] = useState(nowYM);
+  const [ids, setIds] = useState(() => d.settings.eventTypes.filter((t) => t.perf).map((t) => t.id));
+  const toggleId = (id) => setIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  const mk = `${cur.y}-${pad(cur.m + 1)}`;
+  const text = useMemo(() => {
+    const evs = d.events.filter((e) => e.date.startsWith(mk) && ids.includes(e.typeId)).slice().sort(byDT);
+    if (!evs.length) return "";
+    let out = `🥁 ${cur.m + 1}월 연주 일정`;
+    evs.forEach((e) => { out += `\n\n${fmtKo(e.date)}${e.time ? " " + e.time : ""}\n${[e.venue, e.title].filter(Boolean).join(" · ")}`; });
+    return out;
+  }, [d.events, mk, ids, cur.m]);
+  const copy = async () => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      const ta = document.createElement("textarea");
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); } catch (e2) {}
+      document.body.removeChild(ta);
+    }
+    show("연주 일정을 복사했어요"); close();
+  };
+  return (
+    <Sheet title="연주일정 텍스트 추출" footer={<><Btn kind="g" style={{ flex: 1 }} onClick={close}>닫기</Btn><Btn style={{ flex: 2 }} onClick={copy} disabled={!text}>텍스트 복사</Btn></>}>
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}><MonthNav cur={cur} setCur={setCur} /></div>
+      <Fld label="포함할 유형">
+        <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+          {d.settings.eventTypes.map((t) => <Chip key={t.id} on={ids.includes(t.id)} color={t.color} onClick={() => toggleId(t.id)}>{t.name}</Chip>)}
+        </div>
+      </Fld>
+      <Lab>미리보기</Lab>
+      <div style={{ background: C.card2, border: `1px solid ${C.line2}`, borderRadius: 13, padding: 15, fontSize: 14, lineHeight: 1.7, whiteSpace: "pre-wrap", color: text ? C.text : C.faint, minHeight: 110 }}>
+        {text || "이 달에는 선택한 유형의 일정이 없어요."}
+      </div>
+      <div style={{ fontSize: 12, color: C.faint, marginTop: 10, lineHeight: 1.5 }}>밴드 단톡방이나 SNS 공지에 바로 붙여넣기 좋게 만들어져요.</div>
+    </Sheet>
+  );
+}
+
+/* ───────────── 시트: 베뉴 ───────────── */
+function VenueSheet({ init }) {
+  const { d, setD, close, show } = useApp();
+  const editing = init && init.id ? d.venues.find((v) => v.id === init.id) : null;
+  const [f, setF] = useState(() => editing ? { ...editing } : { name: "", person: "", contact: "", status: "연락예정", last: "", memo: "" });
+  const u = (p) => setF((s) => ({ ...s, ...p }));
+  const save = () => {
+    if (!f.name.trim()) return;
+    const v = { ...f, id: editing ? editing.id : uid(), name: f.name.trim() };
+    setD((s) => ({ ...s, venues: editing ? s.venues.map((x) => (x.id === v.id ? v : x)) : [v, ...s.venues] }));
+    close(); show(editing ? "베뉴 정보를 수정했어요" : "베뉴를 추가했어요");
+  };
+  const del = () => { setD((s) => ({ ...s, venues: s.venues.filter((x) => x.id !== editing.id) })); close(); show("베뉴를 삭제했어요"); };
+  return (
+    <Sheet title={editing ? "베뉴 수정" : "새 베뉴"} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!f.name.trim()}>저장</Btn></>}>
+      <Fld label="베뉴 이름"><input className="inp" placeholder="예) 클럽 문라이즈" value={f.name} onChange={(e) => u({ name: e.target.value })} /></Fld>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 10 }}>
+        <Fld label="담당자"><input className="inp" placeholder="이름" value={f.person} onChange={(e) => u({ person: e.target.value })} /></Fld>
+        <Fld label="연락처"><input className="inp" placeholder="전화 · 이메일 · DM" value={f.contact} onChange={(e) => u({ contact: e.target.value })} /></Fld>
+      </div>
+      <Fld label="섭외 상태">
+        <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+          {VENUE_STATUS.map((s) => <Chip key={s} on={f.status === s} color={VSC[s]} onClick={() => u({ status: s })}>{s}</Chip>)}
+        </div>
+      </Fld>
+      <Fld label="마지막 연락일"><input className="inp" type="date" value={f.last} onChange={(e) => u({ last: e.target.value })} /></Fld>
+      <Fld label="메모"><textarea className="inp" rows={3} placeholder="조건, 회신 내용, 다음 액션..." value={f.memo} onChange={(e) => u({ memo: e.target.value })} /></Fld>
+    </Sheet>
+  );
+}
+
+/* ───────────── 시트: 레슨생 ───────────── */
+function StudentSheet({ init }) {
+  const { d, setD, close, show } = useApp();
+  const editing = init && init.id ? d.students.find((s) => s.id === init.id) : null;
+  const [f, setF] = useState(() => editing
+    ? { name: editing.name, info: editing.info || "", contact: editing.contact || "", memo: editing.memo || "" }
+    : { name: "", info: "", contact: "", memo: "" });
+  const u = (p) => setF((s) => ({ ...s, ...p }));
+  const save = () => {
+    if (!f.name.trim()) return;
+    setD((s) => editing
+      ? { ...s, students: s.students.map((x) => (x.id === editing.id ? { ...x, ...f, name: f.name.trim() } : x)) }
+      : { ...s, students: [...s.students, { id: uid(), ...f, name: f.name.trim(), records: [] }] });
+    close(); show(editing ? "레슨생 정보를 수정했어요" : "레슨생을 등록했어요");
+  };
+  const del = () => { setD((s) => ({ ...s, students: s.students.filter((x) => x.id !== editing.id) })); close(); show("레슨생을 삭제했어요"); };
+  return (
+    <Sheet title={editing ? "레슨생 수정" : "새 레슨생"} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!f.name.trim()}>저장</Btn></>}>
+      <Fld label="이름"><input className="inp" value={f.name} onChange={(e) => u({ name: e.target.value })} /></Fld>
+      <Fld label="레슨 요일 · 시간"><input className="inp" placeholder="예) 수 17:00" value={f.info} onChange={(e) => u({ info: e.target.value })} /></Fld>
+      <Fld label="연락처"><input className="inp" placeholder="예) 010-0000-0000" value={f.contact} onChange={(e) => u({ contact: e.target.value })} /></Fld>
+      <Fld label="메모"><textarea className="inp" rows={3} placeholder="레벨, 목표, 특이사항..." value={f.memo} onChange={(e) => u({ memo: e.target.value })} /></Fld>
+    </Sheet>
+  );
+}
+
+/* ───────────── 시트: 레슨 기록 ───────────── */
+function RecordSheet({ init }) {
+  const { d, setD, close, show } = useApp();
+  const st = d.students.find((s) => s.id === init.studentId);
+  const editing = st && init.id ? st.records.find((r) => r.id === init.id) : null;
+  const [f, setF] = useState(() => editing ? { ...editing } : { date: todayKey(), status: "출석", progress: "", feedback: "" });
+  const u = (p) => setF((s) => ({ ...s, ...p }));
+  if (!st) return null;
+  const save = () => {
+    const r = { ...f, id: editing ? editing.id : uid() };
+    setD((s) => ({ ...s, students: s.students.map((x) => (x.id === init.studentId ? { ...x, records: editing ? x.records.map((y) => (y.id === r.id ? r : y)) : [...x.records, r] } : x)) }));
+    close(); show("레슨 기록을 저장했어요");
+  };
+  return (
+    <Sheet title={`${st.name} · 레슨 기록`} footer={<Btn style={{ flex: 1 }} onClick={save}>저장</Btn>}>
+      <Fld label="날짜"><input className="inp" type="date" value={f.date} onChange={(e) => u({ date: e.target.value })} /></Fld>
+      <Fld label="출결">
+        <div style={{ display: "flex", gap: 7 }}>
+          {Object.keys(ATT).map((k) => <Chip key={k} on={f.status === k} color={ATT[k]} onClick={() => u({ status: k })}>{k}</Chip>)}
+        </div>
+      </Fld>
+      <Fld label="진도"><input className="inp" placeholder="예) 16비트 기초 · 교재 24p" value={f.progress} onChange={(e) => u({ progress: e.target.value })} /></Fld>
+      <Fld label="피드백"><textarea className="inp" rows={4} placeholder="잘된 점, 다음 과제, 전달사항..." value={f.feedback} onChange={(e) => u({ feedback: e.target.value })} /></Fld>
+    </Sheet>
+  );
+}
+
+/* ───────────── 시트: 연습 과제 ───────────── */
+function TaskSheet({ init }) {
+  const { d, setD, close, show } = useApp();
+  const editing = init && init.id ? d.tasks.find((t) => t.id === init.id) : null;
+  const P = pracNamesOf(d.settings);
+  const [f, setF] = useState(() => editing ? { ...editing } : { title: "", pos: "", progress: 0, memo: "", done: false });
+  const u = (p) => setF((s) => ({ ...s, ...p }));
+  const save = () => {
+    if (!f.title.trim()) return;
+    const t = { ...f, id: editing ? editing.id : uid(), title: f.title.trim(), progress: Number(f.progress) || 0 };
+    setD((s) => ({ ...s, tasks: editing ? s.tasks.map((x) => (x.id === t.id ? t : x)) : [t, ...s.tasks] }));
+    close(); show("과제를 저장했어요");
+  };
+  const del = () => { setD((s) => ({ ...s, tasks: s.tasks.filter((x) => x.id !== editing.id) })); close(); show("과제를 삭제했어요"); };
+  return (
+    <Sheet title={editing ? `${P.tasks} 수정` : `${P.tasks} 추가`} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!f.title.trim()}>저장</Btn></>}>
+      <Fld label="과제"><input className="inp" placeholder="예) Groove Essentials 12번" value={f.title} onChange={(e) => u({ title: e.target.value })} /></Fld>
+      <Fld label="현재 위치"><input className="inp" placeholder="예) 패턴 8까지 · 현재 160bpm" value={f.pos} onChange={(e) => u({ pos: e.target.value })} /></Fld>
+      <Fld label="메모"><textarea className="inp" rows={3} placeholder="템포 목표, 막히는 부분..." value={f.memo} onChange={(e) => u({ memo: e.target.value })} /></Fld>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.card2, borderRadius: 13, padding: "13px 15px" }}>
+        <div style={{ fontSize: 14, fontWeight: 700 }}>완료 처리</div>
+        <Toggle on={!!f.done} onChange={(v) => u({ done: v })} />
+      </div>
+    </Sheet>
+  );
+}
+
+/* ───────────── 시트: 루틴 블록 ───────────── */
+function BlockSheet({ init }) {
+  const { d, setD, close, show } = useApp();
+  const editing = init && init.id ? d.routine.find((b) => b.id === init.id) : null;
+  const P = pracNamesOf(d.settings);
+  const [f, setF] = useState(() => editing ? { ...editing, min: String(editing.min) } : { label: "", min: "20", color: PALETTE[d.routine.length % PALETTE.length] });
+  const u = (p) => setF((s) => ({ ...s, ...p }));
+  const save = () => {
+    if (!f.label.trim()) return;
+    const b = { id: editing ? editing.id : uid(), label: f.label.trim(), min: parseNum(f.min) || 10, color: f.color };
+    setD((s) => ({ ...s, routine: editing ? s.routine.map((x) => (x.id === b.id ? b : x)) : [...s.routine, b] }));
+    close(); show("루틴을 저장했어요");
+  };
+  const del = () => { setD((s) => ({ ...s, routine: s.routine.filter((x) => x.id !== editing.id) })); close(); show("루틴 블록을 삭제했어요"); };
+  return (
+    <Sheet title={editing ? `${P.routine} 블록 수정` : `${P.routine} 블록 추가`} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!f.label.trim()}>저장</Btn></>}>
+      <Fld label="이름"><input className="inp" placeholder="예) 루디먼츠, 곡 카피" value={f.label} onChange={(e) => u({ label: e.target.value })} /></Fld>
+      <Fld label="시간 (분)"><input className="inp" inputMode="numeric" value={f.min} onChange={(e) => u({ min: e.target.value.replace(/[^0-9]/g, "") })} /></Fld>
+      <Fld label="색상">
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {PALETTE.map((c) => (
+            <button key={c} onClick={() => u({ color: c })} style={{ width: 34, height: 34, borderRadius: "50%", background: c, border: f.color === c ? `3px solid ${C.text}` : "3px solid transparent" }} />
+          ))}
+        </div>
+      </Fld>
+    </Sheet>
+  );
+}
+
+/* ───────────── 시트: 일지 ───────────── */
+function JournalSheet({ init }) {
+  const { d, setD, close, show } = useApp();
+  const kinds = d.settings.journalKinds || [];
+  const editing = init && init.id ? d.journal.find((j) => j.id === init.id) : null;
+  const [f, setF] = useState(() => editing ? { ...editing } : { date: todayKey(), kind: kinds.length ? kinds[0].name : "일지", title: "", content: "" });
+  const u = (p) => setF((s) => ({ ...s, ...p }));
+  const ok = f.content.trim() || f.title.trim();
+  const save = () => {
+    if (!ok) return;
+    const j = { ...f, id: editing ? editing.id : uid() };
+    setD((s) => ({ ...s, journal: editing ? s.journal.map((x) => (x.id === j.id ? j : x)) : [j, ...s.journal] }));
+    close(); show("기록을 저장했어요");
+  };
+  const del = () => { setD((s) => ({ ...s, journal: s.journal.filter((x) => x.id !== editing.id) })); close(); show("기록을 삭제했어요"); };
+  return (
+    <Sheet title={editing ? "기록 수정" : "새 기록"} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!ok}>저장</Btn></>}>
+      <Fld label="종류">
+        <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+          {kinds.map((k) => <Chip key={k.id || k.name} on={f.kind === k.name} color={k.color} onClick={() => u({ kind: k.name })}>{k.name}</Chip>)}
+        </div>
+      </Fld>
+      <Fld label="날짜"><input className="inp" type="date" value={f.date} onChange={(e) => u({ date: e.target.value })} /></Fld>
+      <Fld label="제목"><input className="inp" placeholder="선택 사항" value={f.title} onChange={(e) => u({ title: e.target.value })} /></Fld>
+      <Fld label="내용"><textarea className="inp" rows={7} placeholder="오늘 깨달은 것, 연습의 감각, 공연에서 느낀 점..." value={f.content} onChange={(e) => u({ content: e.target.value })} /></Fld>
+    </Sheet>
+  );
+}
+
+/* ───────────── 시트: 가계부 내역 ───────────── */
+function TxnSheet({ init }) {
+  const { d, setD, close, show } = useApp();
+  const editing = init && init.id ? d.transactions.find((t) => t.id === init.id) : null;
+  const [f, setF] = useState(() => editing
+    ? { ...editing, amount: fmtNum(editing.amount) }
+    : { type: "지출", date: todayKey(), category: d.settings.expenseCats[0] || "기타", amount: "", memo: "" });
+  const u = (p) => setF((s) => ({ ...s, ...p }));
+  const cats = f.type === "수입" ? d.settings.incomeCats : d.settings.expenseCats;
+  const amount = parseNum(f.amount);
+  const save = () => {
+    if (!amount) return;
+    const t = { id: editing ? editing.id : uid(), type: f.type, date: f.date, category: f.category || cats[0] || "기타", amount, memo: (f.memo || "").trim(), eventId: editing ? editing.eventId : undefined };
+    setD((s) => ({ ...s, transactions: editing ? s.transactions.map((x) => (x.id === t.id ? t : x)) : [t, ...s.transactions] }));
+    close(); show("내역을 저장했어요");
+  };
+  const del = () => { setD((s) => ({ ...s, transactions: s.transactions.filter((x) => x.id !== editing.id) })); close(); show("내역을 삭제했어요"); };
+  return (
+    <Sheet title={editing ? "내역 수정" : "가계부 기록"} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!amount}>저장</Btn></>}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 15 }}>
+        {["지출", "수입"].map((k) => (
+          <button key={k} className="press" onClick={() => u({ type: k, category: (k === "수입" ? d.settings.incomeCats[0] : d.settings.expenseCats[0]) || "기타" })}
+            style={{ flex: 1, padding: "13px 0", borderRadius: 13, fontSize: 15, fontWeight: 800, border: `1px solid ${f.type === k ? (k === "수입" ? C.teal : C.red) : C.line2}`, background: f.type === k ? (k === "수입" ? C.tealBg : C.redBg) : "transparent", color: f.type === k ? (k === "수입" ? C.teal : C.red) : C.dim }}>{k}</button>
+        ))}
+      </div>
+      <Fld label="금액"><MoneyInp value={f.amount} onChange={(v) => u({ amount: v })} /></Fld>
+      <Fld label="카테고리">
+        <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+          {cats.map((c) => <Chip key={c} on={f.category === c} onClick={() => u({ category: c })}>{c}</Chip>)}
+        </div>
+      </Fld>
+      <Fld label="날짜"><input className="inp" type="date" value={f.date} onChange={(e) => u({ date: e.target.value })} /></Fld>
+      <Fld label="메모"><input className="inp" placeholder="선택 사항" value={f.memo} onChange={(e) => u({ memo: e.target.value })} /></Fld>
+      {editing && editing.eventId ? <div style={{ fontSize: 12, color: C.faint, lineHeight: 1.5 }}>이 내역은 일정의 입금 처리와 연동돼 자동 기록됐어요.</div> : null}
+    </Sheet>
+  );
+}
+
+/* ───────────── 시트: 설정 · 커스터마이징 ───────────── */
+function SettingsSheet() {
+  const { d, setD, close, show } = useApp();
+  const s = d.settings;
+  const setS = (p) => setD((x) => ({ ...x, settings: { ...x.settings, ...p } }));
+  const [vTxt, setVTxt] = useState("");
+  const [editV, setEditV] = useState(null);
+  const [newType, setNewType] = useState("");
+  const [newInc, setNewInc] = useState("");
+  const [newExp, setNewExp] = useState("");
+  const fileRef = useRef(null);
+  const [newJK, setNewJK] = useState("");
+  const renameJKind = (id, name) => setD((x) => {
+    const old = x.settings.journalKinds.find((j) => j.id === id);
+    if (!old) return x;
+    return {
+      ...x,
+      settings: { ...x.settings, journalKinds: x.settings.journalKinds.map((j) => (j.id === id ? { ...j, name } : j)) },
+      journal: x.journal.map((e) => (e.kind === old.name ? { ...e, kind: name } : e)),
+    };
+  });
+  const delJKind = (id) => setD((x) => {
+    if ((x.settings.journalKinds || []).length <= 1) return x;
+    const removed = x.settings.journalKinds.find((j) => j.id === id);
+    const rest = x.settings.journalKinds.filter((j) => j.id !== id);
+    return {
+      ...x,
+      settings: { ...x.settings, journalKinds: rest },
+      journal: x.journal.map((e) => (removed && e.kind === removed.name ? { ...e, kind: rest[0].name } : e)),
+    };
+  });
+  const doExport = () => { exportBackup(d); show("백업 파일을 내보냈어요"); };
+  const onImport = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const obj = JSON.parse(String(reader.result));
+        if (!obj || typeof obj !== "object" || !obj.settings) throw new Error("형식 오류");
+        setD(normalizeBackup(obj));
+        show("백업을 불러와 전체 복원했어요");
+      } catch (err) { show("백업 파일을 읽을 수 없어요"); }
+    };
+    reader.onerror = () => show("파일을 여는 데 실패했어요");
+    reader.readAsText(file);
+  };
+  const addValue = () => { const t = vTxt.trim(); if (!t) return; setS({ values: [...s.values, { id: uid(), text: t }] }); setVTxt(""); };
+  const delType = (id) => setD((x) => {
+    if (x.settings.eventTypes.length <= 1) return x;
+    const rest = x.settings.eventTypes.filter((t) => t.id !== id);
+    const fb = rest[rest.length - 1].id;
+    return { ...x, settings: { ...x.settings, eventTypes: rest }, events: x.events.map((e) => (e.typeId === id ? { ...e, typeId: fb } : e)) };
+  });
+  const cycleColor = (id) => setS({ eventTypes: s.eventTypes.map((t) => (t.id === id ? { ...t, color: PALETTE[(PALETTE.indexOf(t.color) + 1) % PALETTE.length] } : t)) });
+  const widgetRows = [["stats", "이번 달 요약 카드"], ["values", "음악 가치관 리마인더"], ["unpaid", "미입금 알림"], ["today", "오늘 · 다가오는 일정"], ["todo", "To-do 리스트"]];
+  const H = ({ children }) => <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", color: C.gold, margin: "26px 0 12px" }}>{children}</div>;
+  const rowBox = { display: "flex", alignItems: "center", justifyContent: "space-between", background: C.card2, borderRadius: 13, padding: "12px 15px", marginBottom: 8, gap: 10 };
+  return (
+    <Sheet title="설정 · 커스터마이징" full footer={<Btn style={{ flex: 1 }} onClick={close}>완료</Btn>}>
+      <H>프로필</H>
+      <input className="inp" placeholder="이름 (홈 인사말에 쓰여요)" value={s.userName} onChange={(e) => setS({ userName: e.target.value })} />
+
+      <H>음악 가치관</H>
+      {s.values.map((v) => (
+        <div key={v.id} style={{ marginBottom: 8 }}>
+          {editV && editV.id === v.id ? (
+            <div>
+              <textarea className="inp" rows={2} value={editV.text} onChange={(e) => setEditV({ ...editV, text: e.target.value })} />
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <Btn kind="g" style={{ flex: 1, padding: "10px 0" }} onClick={() => setEditV(null)}>취소</Btn>
+                <Btn style={{ flex: 1, padding: "10px 0" }} onClick={() => { setS({ values: s.values.map((x) => (x.id === v.id ? { ...x, text: editV.text.trim() || x.text } : x)) }); setEditV(null); }}>저장</Btn>
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 4, background: C.card2, borderRadius: 13, padding: "12px 8px 12px 15px" }}>
+              <div style={{ flex: 1, fontSize: 14, lineHeight: 1.5, fontFamily: SERIF }}>{v.text}</div>
+              <button className="ib" style={{ padding: 6 }} onClick={() => setEditV({ id: v.id, text: v.text })}><Pencil size={14} color={C.faint} /></button>
+              <button className="ib" style={{ padding: 6 }} onClick={() => setS({ values: s.values.filter((x) => x.id !== v.id) })}><Trash2 size={14} color={C.faint} /></button>
+            </div>
+          )}
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8 }}>
+        <input className="inp" placeholder="새 문장 추가" value={vTxt} onChange={(e) => setVTxt(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addValue()} />
+        <Btn style={{ padding: "0 17px" }} onClick={addValue}><Plus size={18} /></Btn>
+      </div>
+
+      <H>일정 유형</H>
+      <div style={{ fontSize: 12, color: C.faint, marginBottom: 10, lineHeight: 1.5 }}>색 점을 누르면 색이 바뀌고, '연주'를 켜면 연주일정 추출과 홈의 연주 횟수에 포함돼요.</div>
+      {s.eventTypes.map((t) => (
+        <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 7, background: C.card2, borderRadius: 13, padding: "9px 8px 9px 12px", marginBottom: 8 }}>
+          <button onClick={() => cycleColor(t.id)} style={{ width: 22, height: 22, borderRadius: "50%", background: t.color, border: "2px solid rgba(255,255,255,0.15)", flexShrink: 0 }} />
+          <input className="inp" style={{ background: "transparent", border: "none", padding: "8px 4px", flex: 1, minWidth: 0, boxShadow: "none" }} value={t.name} onChange={(e) => setS({ eventTypes: s.eventTypes.map((x) => (x.id === t.id ? { ...x, name: e.target.value } : x)) })} />
+          <button onClick={() => setS({ eventTypes: s.eventTypes.map((x) => (x.id === t.id ? { ...x, perf: !x.perf } : x)) })} style={{ fontSize: 11.5, fontWeight: 800, padding: "6px 11px", borderRadius: 100, border: `1px solid ${t.perf ? C.gold : C.line2}`, background: t.perf ? C.goldBg : "transparent", color: t.perf ? C.gold : C.faint, flexShrink: 0 }}>연주</button>
+          <button className="ib" style={{ padding: 6 }} onClick={() => delType(t.id)}><Trash2 size={14} color={C.faint} /></button>
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8 }}>
+        <input className="inp" placeholder="새 유형 이름" value={newType} onChange={(e) => setNewType(e.target.value)} />
+        <Btn style={{ padding: "0 17px" }} onClick={() => { const n = newType.trim(); if (!n) return; setS({ eventTypes: [...s.eventTypes, { id: uid(), name: n, color: PALETTE[s.eventTypes.length % PALETTE.length], perf: false }] }); setNewType(""); }}><Plus size={18} /></Btn>
+      </div>
+
+      <H>연습 탭 이름</H>
+      <div style={{ fontSize: 12, color: C.faint, marginBottom: 10, lineHeight: 1.5 }}>연습 탭의 메뉴 이름을 원하는 대로 바꿀 수 있어요. 비우면 기본 이름으로 돌아가요.</div>
+      {[["tasks", "과제"], ["routine", "루틴"], ["journal", "일지"]].map(([k, def]) => (
+        <div key={k} style={{ display: "flex", alignItems: "center", gap: 10, background: C.card2, borderRadius: 13, padding: "3px 15px", marginBottom: 8 }}>
+          <div style={{ fontSize: 11.5, color: C.faint, fontWeight: 800, width: 58, flexShrink: 0 }}>기본 {def}</div>
+          <input className="inp" style={{ background: "transparent", border: "none", padding: "11px 0", boxShadow: "none", flex: 1, minWidth: 0 }} placeholder={def}
+            value={s.pracNames && s.pracNames[k] !== undefined ? s.pracNames[k] : def}
+            onChange={(e) => setS({ pracNames: { ...pracNamesOf(s), ...(s.pracNames || {}), [k]: e.target.value } })} />
+        </div>
+      ))}
+
+      <H>일지 카테고리</H>
+      <div style={{ fontSize: 12, color: C.faint, marginBottom: 10, lineHeight: 1.5 }}>색 점을 누르면 색이 바뀌어요. 이름을 바꾸면 기존 기록에도 그대로 적용돼요.</div>
+      {(s.journalKinds || []).map((k) => (
+        <div key={k.id || k.name} style={{ display: "flex", alignItems: "center", gap: 7, background: C.card2, borderRadius: 13, padding: "9px 8px 9px 12px", marginBottom: 8 }}>
+          <button onClick={() => setS({ journalKinds: s.journalKinds.map((x) => (x.id === k.id ? { ...x, color: PALETTE[(PALETTE.indexOf(x.color) + 1) % PALETTE.length] } : x)) })} style={{ width: 22, height: 22, borderRadius: "50%", background: k.color, border: "2px solid rgba(255,255,255,0.15)", flexShrink: 0 }} />
+          <input className="inp" style={{ background: "transparent", border: "none", padding: "8px 4px", flex: 1, minWidth: 0, boxShadow: "none" }} value={k.name} onChange={(e) => renameJKind(k.id, e.target.value)} />
+          <button className="ib" style={{ padding: 6 }} onClick={() => delJKind(k.id)}><Trash2 size={14} color={C.faint} /></button>
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8 }}>
+        <input className="inp" placeholder="새 카테고리 이름" value={newJK} onChange={(e) => setNewJK(e.target.value)} />
+        <Btn style={{ padding: "0 17px" }} onClick={() => { const n = newJK.trim(); if (!n || (s.journalKinds || []).some((x) => x.name === n)) return; setS({ journalKinds: [...(s.journalKinds || []), { id: uid(), name: n, color: PALETTE[(s.journalKinds || []).length % PALETTE.length] }] }); setNewJK(""); }}><Plus size={18} /></Btn>
+      </div>
+
+      <H>가계부 카테고리</H>
+      <Lab>수입</Lab>
+      <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 10 }}>
+        {s.incomeCats.map((c) => (
+          <span key={c} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 9px 7px 13px", borderRadius: 100, border: `1px solid ${C.line2}`, fontSize: 13, fontWeight: 700 }}>
+            {c}
+            {s.incomeCats.length > 1 && <button onClick={() => setS({ incomeCats: s.incomeCats.filter((x) => x !== c) })} style={{ background: "none", border: "none", padding: 2, display: "flex" }}><X size={13} color={C.faint} /></button>}
+          </span>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <input className="inp" placeholder="수입 카테고리 추가" value={newInc} onChange={(e) => setNewInc(e.target.value)} />
+        <Btn style={{ padding: "0 17px" }} onClick={() => { const n = newInc.trim(); if (!n || s.incomeCats.includes(n)) return; setS({ incomeCats: [...s.incomeCats, n] }); setNewInc(""); }}><Plus size={18} /></Btn>
+      </div>
+      <Lab>지출</Lab>
+      <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 10 }}>
+        {s.expenseCats.map((c) => (
+          <span key={c} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "7px 9px 7px 13px", borderRadius: 100, border: `1px solid ${C.line2}`, fontSize: 13, fontWeight: 700 }}>
+            {c}
+            {s.expenseCats.length > 1 && <button onClick={() => setS({ expenseCats: s.expenseCats.filter((x) => x !== c) })} style={{ background: "none", border: "none", padding: 2, display: "flex" }}><X size={13} color={C.faint} /></button>}
+          </span>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input className="inp" placeholder="지출 카테고리 추가" value={newExp} onChange={(e) => setNewExp(e.target.value)} />
+        <Btn style={{ padding: "0 17px" }} onClick={() => { const n = newExp.trim(); if (!n || s.expenseCats.includes(n)) return; setS({ expenseCats: [...s.expenseCats, n] }); setNewExp(""); }}><Plus size={18} /></Btn>
+      </div>
+
+      <H>홈 화면 위젯</H>
+      {widgetRows.map(([k, label]) => (
+        <div key={k} style={rowBox}>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>{label}</div>
+          <Toggle on={s.homeWidgets[k] !== false} onChange={(v) => setS({ homeWidgets: { ...s.homeWidgets, [k]: v } })} />
+        </div>
+      ))}
+
+      <H>연동</H>
+      <div style={rowBox}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>입금 완료 → 가계부 자동 기록</div>
+          <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>일정을 입금 처리하면 수입으로 자동 저장돼요</div>
+        </div>
+        <Toggle on={!!s.autoLedger} onChange={(v) => setS({ autoLedger: v })} />
+      </div>
+
+      <H>백업 · 데이터</H>
+      <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={onImport} />
+      <Btn kind="g" style={{ width: "100%", marginBottom: 9, border: "1px solid rgba(233,190,88,0.45)", color: C.gold }} onClick={doExport}>백업 파일 내보내기 (.json)</Btn>
+      <Btn kind="g" style={{ width: "100%", marginBottom: 9 }} onClick={() => fileRef.current && fileRef.current.click()}>백업 파일 불러오기</Btn>
+      <div style={{ fontSize: 12, color: C.faint, margin: "2px 0 18px", lineHeight: 1.6 }}>백업은 항상 같은 이름(BACKSTAGE.json)으로 다운로드 폴더에 저장돼요 — 파일 앱에서 iCloud Drive로 옮겨두면 안전해요. 불러오기를 하면 현재 데이터가 백업 파일 내용으로 교체돼요.</div>
+    </Sheet>
+  );
+}
+
+/* ───────────── 시트 라우터 · 헤더 · 내비 ───────────── */
+function SheetRouter({ sheet }) {
+  const init = sheet.init;
+  switch (sheet.k) {
+    case "event": return <EventSheet init={init} />;
+    case "extract": return <ExtractSheet />;
+    case "venue": return <VenueSheet init={init} />;
+    case "student": return <StudentSheet init={init} />;
+    case "record": return <RecordSheet init={init} />;
+    case "task": return <TaskSheet init={init} />;
+    case "block": return <BlockSheet init={init} />;
+    case "journal": return <JournalSheet init={init} />;
+    case "txn": return <TxnSheet init={init} />;
+    case "settings": return <SettingsSheet />;
+    default: return null;
+  }
+}
+
+function Header() {
+  const { open, saveState } = useApp();
+  return (
+    <header style={{ position: "sticky", top: 0, zIndex: 30, backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", background: "rgba(12,11,8,0.85)", borderBottom: `1px solid ${C.line}`, paddingTop: "max(env(safe-area-inset-top), 8px)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 18px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+          <div style={{ width: 27, height: 27, borderRadius: 9, background: "linear-gradient(150deg, #F0CA6B, #C9962F)", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 10px rgba(233,190,88,0.25)" }}>
+            <Music4 size={15} color="#17130A" strokeWidth={2.6} />
+          </div>
+          <div style={{ fontFamily: DISP, fontSize: 16.5, letterSpacing: "0.3em", color: C.gold, lineHeight: 1, paddingTop: 3 }}>BACKSTAGE</div>
+        </div>
+        {saveState === "error" && (
+          <button onClick={() => open({ k: "settings" })} style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: "none", padding: "6px 4px" }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.red, flexShrink: 0 }} />
+            <span style={{ fontSize: 10.5, fontWeight: 800, color: C.red, whiteSpace: "nowrap" }}>저장 실패—백업 필요</span>
+          </button>
+        )}
+      </div>
+    </header>
+  );
+}
+
+const NAV = [
+  { k: "home", l: "홈", I: Home },
+  { k: "cal", l: "일정", I: CalendarDays },
+  { k: "lesson", l: "레슨", I: GraduationCap },
+  { k: "prac", l: "연습", I: Music4 },
+  { k: "money", l: "머니", I: Wallet },
+];
+
+function Nav({ tab, setTab }) {
+  const { open } = useApp();
+  return (
+    <nav style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 520, zIndex: 35, background: "rgba(13,12,9,0.92)", backdropFilter: "blur(18px)", WebkitBackdropFilter: "blur(18px)", borderTop: `1px solid ${C.line}`, display: "flex", padding: "7px 6px calc(9px + env(safe-area-inset-bottom))" }}>
+      {NAV.map(({ k, l, I }) => {
+        const on = tab === k;
+        return (
+          <button key={k} onClick={() => setTab(k)} style={{ position: "relative", flex: 1, background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "6px 0" }}>
+            <div style={{ position: "absolute", top: -8, left: "50%", transform: "translateX(-50%)", width: 20, height: 3, borderRadius: "0 0 3px 3px", background: on ? C.gold : "transparent", boxShadow: on ? "0 3px 12px rgba(233,190,88,0.55)" : "none", transition: "background .2s" }} />
+            <I size={21} color={on ? C.gold : C.faint} strokeWidth={on ? 2.4 : 2} />
+            <span style={{ fontSize: 10.5, fontWeight: 800, color: on ? C.gold : C.faint }}>{l}</span>
+          </button>
+        );
+      })}
+      <button onClick={() => open({ k: "settings" })} style={{ flex: 1, background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "6px 0" }}>
+        <Settings size={21} color={C.faint} strokeWidth={2} />
+        <span style={{ fontSize: 10.5, fontWeight: 800, color: C.faint }}>설정</span>
+      </button>
+    </nav>
+  );
+}
+
+function Loading() {
+  return (
+    <div style={{ minHeight: "100dvh", background: C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, fontFamily: FONT }}>
+      <style>{CSS}</style>
+      <div style={{ width: 46, height: 46, borderRadius: 15, background: "linear-gradient(150deg, #F0CA6B, #C9962F)", display: "flex", alignItems: "center", justifyContent: "center", animation: "pulse 1.4s infinite", boxShadow: "0 6px 24px rgba(233,190,88,0.3)" }}>
+        <Music4 size={24} color="#17130A" strokeWidth={2.5} />
+      </div>
+      <div style={{ fontFamily: DISP, fontSize: 15, letterSpacing: "0.32em", color: C.gold, paddingLeft: "0.32em" }}>BACKSTAGE</div>
+    </div>
+  );
+}
+
+/* ───────────── 앱 루트 ───────────── */
+function App() {
+  const [d, setD] = useState(null);
+  const [tab, setTab] = useState("home");
+  const [sheet, setSheet] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [saveState, setSaveState] = useState("saving");
+  const saveT = useRef(null);
+  const toastT = useRef(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      let loaded = null;
+      try {
+        const raw = await store.get(KEY);
+        if (raw) loaded = JSON.parse(raw);
+      } catch (err) { /* 첫 실행 */ }
+      if (alive) setD(loaded ? normalizeBackup(loaded) : seedData());
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!d) return;
+    setSaveState("saving");
+    clearTimeout(saveT.current);
+    saveT.current = setTimeout(async () => {
+      let ok = false;
+      try { ok = await store.set(KEY, JSON.stringify(d)); } catch (err) { ok = false; }
+      setSaveState(ok ? "saved" : "error");
+    }, 700);
+    return () => clearTimeout(saveT.current);
+  }, [d]);
+
+  const show = (m) => { setToast(m); clearTimeout(toastT.current); toastT.current = setTimeout(() => setToast(null), 1800); };
+
+  const togglePaid = (evId, paid) => setD((s) => {
+    const ev0 = s.events.find((e) => e.id === evId);
+    if (!ev0) return s;
+    const events = s.events.map((e) => (e.id === evId ? { ...e, paid, paidDate: paid ? todayKey() : "" } : e));
+    let transactions = s.transactions.filter((t) => t.eventId !== evId);
+    if (paid && s.settings.autoLedger && ev0.fee > 0) {
+      const type = s.settings.eventTypes.find((t) => t.id === ev0.typeId);
+      transactions = [...transactions, { id: uid(), date: todayKey(), type: "수입", category: type ? (type.perf ? "연주" : type.name) : "기타수입", amount: ev0.fee, memo: ev0.title + (ev0.venue ? " · " + ev0.venue : ""), eventId: ev0.id }];
+    }
+    return { ...s, events, transactions };
+  });
+
+  if (!d) return <Loading />;
+
+  const ctx = { d, setD, open: setSheet, close: () => setSheet(null), show, setTab, togglePaid, saveState };
+
+  return (
+    <Ctx.Provider value={ctx}>
+      <div style={{ minHeight: "100dvh", background: C.bg, color: C.text, fontFamily: FONT, letterSpacing: "-0.01em" }}>
+        <style>{CSS}</style>
+        <div style={{ maxWidth: 520, margin: "0 auto", minHeight: "100dvh", position: "relative" }}>
+          <div style={{ position: "absolute", top: -130, left: "50%", transform: "translateX(-50%)", width: 460, height: 340, background: "radial-gradient(closest-side, rgba(233,190,88,0.11), transparent)", pointerEvents: "none" }} />
+          <Header />
+          <main style={{ padding: "0 18px 118px", position: "relative" }}>
+            {tab === "home" && <HomeTab />}
+            {tab === "cal" && <ScheduleTab />}
+            {tab === "lesson" && <LessonsTab />}
+            {tab === "prac" && <PracticeTab />}
+            {tab === "money" && <MoneyTab />}
+          </main>
+          <Nav tab={tab} setTab={setTab} />
+          {sheet && <SheetRouter sheet={sheet} />}
+          {toast && <Toast msg={toast} />}
+        </div>
+      </div>
+    </Ctx.Provider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
