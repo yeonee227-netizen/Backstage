@@ -116,6 +116,17 @@ const WKEN = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 const VENUE_STATUS = ["연락예정", "연락중", "확정", "보류", "거절"];
 const VSC = { 연락예정: C.gray, 연락중: C.blue, 확정: C.teal, 보류: C.gold, 거절: C.red };
 const ATT = { 출석: C.teal, 보강: C.gold, 결석: C.red };
+const PAY_CYCLES = [
+  { key: "2s", n: 2, at: "start", label: "2회 시작 시 입금" },
+  { key: "2e", n: 2, at: "end", label: "2회 끝날 시 입금" },
+  { key: "4s", n: 4, at: "start", label: "4회 시작 시 입금" },
+  { key: "4e", n: 4, at: "end", label: "4회 끝날 시 입금" },
+];
+const payCycleLabel = (pc) => { const f = pc && PAY_CYCLES.find((p) => p.n === pc.n && p.at === pc.at); return f ? f.label : ""; };
+/* 입금 주기 패턴: i(1부터) 회차에 입금이 잡히는지 */
+const payOnSeq = (i, pc) => (!pc ? true : pc.at === "start" ? i % pc.n === 1 : i % pc.n === 0);
+const ENBY = { 1: "SOLO", 2: "DUO", 3: "TRIO", 4: "QUARTET", 5: "QUINTET", 6: "SEXTET", 7: "SEPTET", 8: "OCTET", 9: "NONET" };
+const isLessonType = (t) => !!t && (t.id === "t_lesson" || (t.name || "").includes("레슨"));
 const KEY = "backstage-v1";
 
 /* ───────────── 유틸 ───────────── */
@@ -130,6 +141,14 @@ const won = (n) => `${(n || 0).toLocaleString()}원`;
 const wonShort = (n) => { n = n || 0; return n >= 10000 ? `${(n / 10000).toLocaleString(undefined, { maximumFractionDigits: 1 })}만원` : `${n.toLocaleString()}원`; };
 const parseNum = (v) => Number(String(v || "").replace(/[^\d]/g, "")) || 0;
 const fmtNum = (v) => { const n = String(v || "").replace(/[^\d]/g, ""); return n ? Number(n).toLocaleString() : ""; };
+const fmtK12 = (t) => {
+  if (!t || !/^\d{1,2}:\d{2}$/.test(t)) return t || "";
+  const [h, m] = t.split(":").map(Number);
+  const mer = h < 12 ? "오전" : "오후";
+  let h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  return `${mer} ${h12}:${pad(m)}`;
+};
 const snap5 = (t) => {
   if (!t || !/^\d{1,2}:\d{2}$/.test(t)) return t || "";
   const [h, m] = t.split(":").map(Number);
@@ -176,9 +195,9 @@ const defaultSettings = () => ({
   expenseCats: ["장비", "교통", "식비", "스튜디오", "교육", "생활", "기타"],
   instruments: ["BASS", "PIANO", "ALTO SAX", "TENOR SAX", "TRUMPET", "TROMBONE", "ORGAN", "GUITAR", "VOCAL", "FLUTE", "DRUMS"],
   ensembles: [
-    { id: "en_1", name: "솔로", size: 1 }, { id: "en_2", name: "듀오", size: 2 }, { id: "en_3", name: "트리오", size: 3 },
-    { id: "en_4", name: "콰르텟", size: 4 }, { id: "en_5", name: "퀸텟", size: 5 }, { id: "en_6", name: "섹스텟", size: 6 },
-    { id: "en_7", name: "셉텟", size: 7 }, { id: "en_8", name: "옥텟", size: 8 }, { id: "en_9", name: "노넷", size: 9 },
+    { id: "en_1", name: "솔로", size: 1, en: "SOLO" }, { id: "en_2", name: "듀오", size: 2, en: "DUO" }, { id: "en_3", name: "트리오", size: 3, en: "TRIO" },
+    { id: "en_4", name: "콰르텟", size: 4, en: "QUARTET" }, { id: "en_5", name: "퀸텟", size: 5, en: "QUINTET" }, { id: "en_6", name: "섹스텟", size: 6, en: "SEXTET" },
+    { id: "en_7", name: "셉텟", size: 7, en: "SEPTET" }, { id: "en_8", name: "옥텟", size: 8, en: "OCTET" }, { id: "en_9", name: "노넷", size: 9, en: "NONET" },
   ],
   curriculum: [
     { id: "cu_1", name: "기초 루디먼트" }, { id: "cu_2", name: "8비트" }, { id: "cu_3", name: "16비트" }, { id: "cu_4", name: "셔플 그루브" },
@@ -188,13 +207,14 @@ const defaultSettings = () => ({
     { id: "jk_insight", name: "깨달음", color: C.gold },
     { id: "jk_idea", name: "아이디어", color: C.violet },
   ],
-  pracNames: { tasks: "과제", routine: "루틴", journal: "일지" },
+  pracNames: { routine: "루틴", memo: "메모" },
   homeWidgets: { stats: true, values: true, unpaid: true, today: true, todo: true },
 });
 
 const emptyData = () => ({
   settings: defaultSettings(), events: [], todos: [], students: [], tasks: [],
   routine: [], routineChecks: {}, scores: [], venues: [], transactions: [], journal: [],
+  memoBlocks: [], memos: [],
 });
 
 /* 백업 파일 복원 시 누락 필드 보정 */
@@ -206,51 +226,83 @@ function normalizeBackup(obj) {
     if (!Array.isArray(out.settings[k]) || !out.settings[k].length) out.settings[k] = base.settings[k];
   });
   if (!Array.isArray(out.settings.curriculum)) out.settings.curriculum = base.settings.curriculum;
-  out.settings.ensembles = out.settings.ensembles.filter((e) => e && e.name);
+  out.settings.ensembles = out.settings.ensembles.filter((e) => e && e.name).map((e) => (e.en ? e : { ...e, en: ENBY[e.size] || "" }));
   if (!out.settings.homeWidgets || typeof out.settings.homeWidgets !== "object") out.settings.homeWidgets = base.settings.homeWidgets;
   if (!out.settings.pracNames || typeof out.settings.pracNames !== "object") out.settings.pracNames = base.settings.pracNames;
-  ["events", "todos", "students", "tasks", "routine", "scores", "venues", "transactions", "journal"].forEach((k) => {
+  ["events", "todos", "students", "tasks", "routine", "scores", "venues", "transactions", "journal", "memos"].forEach((k) => {
     if (!Array.isArray(out[k])) out[k] = [];
   });
   if (!out.routineChecks || typeof out.routineChecks !== "object") out.routineChecks = {};
+  /* 구버전 데이터 → 메모 시스템 자동 이관 (일지 카테고리→메모 블록, 일지·과제→날짜 메모) */
+  if (!obj || !Array.isArray(obj.memoBlocks)) {
+    const blocks = [];
+    const memos = [];
+    if (out.journal.length) {
+      const byName = {};
+      (out.settings.journalKinds || []).forEach((k) => { const b = { id: uid(), name: k.name }; blocks.push(b); byName[k.name] = b.id; });
+      out.journal.forEach((j) => {
+        let bId = byName[j.kind];
+        if (!bId) { const b = { id: uid(), name: j.kind || "일지" }; blocks.push(b); byName[b.name] = b.id; bId = b.id; }
+        memos.push({ id: uid(), blockId: bId, date: j.date || todayKey(), text: (j.title ? j.title + "\n" : "") + (j.content || "") });
+      });
+    }
+    if (out.tasks.length) {
+      const tb = { id: uid(), name: "과제" };
+      blocks.push(tb);
+      out.tasks.forEach((t) => memos.push({ id: uid(), blockId: tb.id, date: todayKey(), text: (t.title || "") + (t.pos ? " — " + t.pos : "") + (t.memo ? "\n" + t.memo : "") + (t.done ? "\n(완료)" : "") }));
+    }
+    if (!blocks.length) ["느낀점", "현재구간", "다음목표"].forEach((n) => blocks.push({ id: uid(), name: n }));
+    out.memoBlocks = blocks;
+    out.memos = memos;
+  } else if (!Array.isArray(out.memoBlocks)) {
+    out.memoBlocks = [];
+  }
   return out;
 }
 
 const pracNamesOf = (s) => {
   const p = (s && s.pracNames) || {};
-  return { tasks: p.tasks || "과제", routine: p.routine || "루틴", journal: p.journal || "일지" };
+  return { routine: p.routine || "루틴", memo: p.memo || "메모" };
 };
 
 function seedData() {
   const base = emptyData();
   const t = new Date();
   const k = (off) => keyOf(new Date(t.getFullYear(), t.getMonth(), t.getDate() + off));
+  const students = [
+    { id: uid(), name: "지훈", info: "수 17:00", contact: "010-0000-0000", memo: "고등학생 · 밴드부", progressId: "cu_3", att: { [k(-7)]: "O" }, absents: [], records: [
+      { id: uid(), date: k(-7), status: "출석", progress: "8비트 응용 패턴 4번까지", feedback: "하이햇 오픈 타이밍이 좋아짐. 필인에서 급해지는 습관 체크." },
+      { id: uid(), date: k(0), status: "출석", progress: "16비트 기초 진입", feedback: "고스트 노트 볼륨 조절 과제로." },
+    ] },
+    { id: uid(), name: "서연", info: "토 11:00", contact: "", memo: "취미 성인반", progressId: "cu_1", records: [
+      { id: uid(), date: k(-5), status: "보강", progress: "모엘러 주법 2단계", feedback: "손목 힘 빼는 감각이 좋아짐." },
+    ] },
+  ];
   const events = [
     { id: uid(), title: "재즈 트리오", typeId: "t_gig", date: k(2), time: "20:00", venue: "클럽 문라이즈", fee: 150000, paid: false, paidDate: "", memo: "2세트 · 스탠다드 위주", callTime: "18:30", showTime: "20:00", ensemble: "트리오", leader: "", members: [], teamNameOn: false, teamName: "" },
-    { id: uid(), title: "성인 취미반 레슨", typeId: "t_lesson", date: k(1), time: "14:00", venue: "연습실 A", fee: 50000, paid: false, paidDate: "", memo: "" },
+    { id: uid(), title: "서연 레슨", typeId: "t_lesson", date: k(1), time: "14:00", venue: "연습실 A", fee: 50000, paid: false, paidDate: "", memo: "", studentId: students[1].id },
+    { id: uid(), title: "지훈 레슨", typeId: "t_lesson", date: k(-7), time: "17:00", venue: "연습실 A", fee: 200000, paid: false, paidDate: "", memo: "", studentId: students[0].id, groupId: "g_seed_l1", payCycle: { n: 4, at: "start" }, payAmount: 200000 },
+    { id: uid(), title: "지훈 레슨", typeId: "t_lesson", date: k(0), time: "17:00", venue: "연습실 A", fee: 0, paid: false, paidDate: "", memo: "", studentId: students[0].id, groupId: "g_seed_l1", payCycle: { n: 4, at: "start" }, payAmount: 200000 },
+    { id: uid(), title: "지훈 레슨", typeId: "t_lesson", date: k(7), time: "17:00", venue: "연습실 A", fee: 0, paid: false, paidDate: "", memo: "", studentId: students[0].id, groupId: "g_seed_l1", payCycle: { n: 4, at: "start" }, payAmount: 200000 },
     { id: uid(), title: "밴드 합주", typeId: "t_reh", date: k(0), time: "19:00", venue: "사운드웨이브", fee: 0, paid: false, paidDate: "", memo: "신곡 2곡 맞추기" },
     { id: uid(), title: "단독 공연", typeId: "t_show", date: k(-4), time: "19:30", venue: "홍대 라이브홀", fee: 200000, paid: true, paidDate: k(-2), memo: "" },
     { id: uid(), title: "앨범 세션", typeId: "t_rec", date: k(9), time: "13:00", venue: "머쉬룸 스튜디오", fee: 300000, paid: false, paidDate: "", memo: "4곡 · 차트 미리 받기" },
   ];
-  const students = [
-    { id: uid(), name: "지훈", info: "수 17:00", contact: "010-0000-0000", memo: "고등학생 · 밴드부", records: [
-      { id: uid(), date: k(-7), status: "출석", progress: "8비트 응용 패턴 4번까지", feedback: "하이햇 오픈 타이밍이 좋아짐. 필인에서 급해지는 습관 체크." },
-      { id: uid(), date: k(0), status: "출석", progress: "16비트 기초 진입", feedback: "고스트 노트 볼륨 조절 과제로." },
-    ] },
-    { id: uid(), name: "서연", info: "토 11:00", contact: "", memo: "취미 성인반", records: [
-      { id: uid(), date: k(-5), status: "보강", progress: "모엘러 주법 2단계", feedback: "손목 힘 빼는 감각이 좋아짐." },
-    ] },
+  const memoBlocks = [
+    { id: "mb_1", name: "느낀점" },
+    { id: "mb_2", name: "현재구간" },
+    { id: "mb_3", name: "다음목표" },
   ];
-  const tasks = [
-    { id: uid(), title: "Groove Essentials 12번", pos: "패턴 8까지", progress: 60, memo: "메트로놈 90 → 100", done: false },
-    { id: uid(), title: "더블 스트로크 180bpm", pos: "현재 160bpm", progress: 45, memo: "", done: false },
-    { id: uid(), title: "Rosanna 하프타임 셔플 카피", pos: "브릿지 전까지", progress: 80, memo: "고스트 노트 디테일 살리기", done: false },
+  const memos = [
+    { id: uid(), blockId: "mb_1", date: k(-1), text: "고스트 노트는 '작게'가 아니라 '메인 노트와의 거리'다. 그 차이가 클수록 그루브가 깊어진다. 볼륨 3단계 연습을 루틴에 추가할 것." },
+    { id: uid(), blockId: "mb_2", date: k(0), text: "Groove Essentials 12번 — 패턴 8까지, 메트로놈 90 → 100" },
+    { id: uid(), blockId: "mb_3", date: k(0), text: "더블 스트로크 180bpm (현재 160bpm)" },
   ];
   const routine = [
-    { id: uid(), label: "워밍업 · 스틱 컨트롤", min: 20, color: C.gold },
-    { id: uid(), label: "루디먼츠", min: 30, color: C.teal },
-    { id: uid(), label: "곡 카피 · 차트", min: 40, color: C.violet },
-    { id: uid(), label: "즉흥 · 크리에이티브", min: 20, color: C.red },
+    { id: uid(), label: "워밍업 · 스틱 컨트롤", color: C.gold },
+    { id: uid(), label: "루디먼츠", color: C.teal },
+    { id: uid(), label: "곡 카피 · 차트", color: C.violet },
+    { id: uid(), label: "즉흥 · 크리에이티브", color: C.red },
   ];
   const venues = [
     { id: uid(), name: "클럽 문라이즈", person: "김실장", contact: "02-000-0000", status: "확정", last: k(-2), memo: "이번 달 둘째 주 트리오 확정" },
@@ -262,14 +314,11 @@ function seedData() {
     { id: uid(), date: k(-3), type: "지출", category: "장비", amount: 18000, memo: "스틱 3켤레" },
     { id: uid(), date: k(-1), type: "지출", category: "교통", amount: 12400, memo: "" },
   ];
-  const journal = [
-    { id: uid(), date: k(-1), kind: "깨달음", title: "고스트 노트의 볼륨", content: "고스트 노트는 '작게'가 아니라 '메인 노트와의 거리'다. 그 차이가 클수록 그루브가 깊어진다. 볼륨 3단계 연습을 루틴에 추가할 것." },
-  ];
   const todos = [
     { id: uid(), text: "문라이즈 셋리스트 보내기", done: false },
     { id: uid(), text: "심벌 펠트 교체", done: false },
   ];
-  return { ...base, events, students, tasks, routine, venues, transactions, journal, todos };
+  return { ...base, events, students, routine, venues, transactions, todos, memoBlocks, memos };
 }
 
 /* ───────────── 전역 스타일 ───────────── */
@@ -621,12 +670,18 @@ function EventCard({ ev, showDate }) {
   const tc = (type && type.color) || C.gray;
   const dd = ddays(ev.date);
   const ddLabel = showDate ? (dd === 0 ? " · 오늘" : dd === 1 ? " · 내일" : dd > 1 ? ` · D-${dd}` : "") : "";
+  let lessonNo = null;
+  if (isLessonType(type) && ev.groupId) {
+    const seq = d.events.filter((e) => e.groupId === ev.groupId).slice().sort((a, b) => a.date.localeCompare(b.date));
+    const i = seq.findIndex((e) => e.id === ev.id);
+    if (i >= 0) lessonNo = i + 1;
+  }
   return (
     <div className="press" onClick={() => open({ k: "event", init: { id: ev.id } })} style={{ display: "flex", alignItems: "stretch", background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, marginBottom: 9, overflow: "hidden", cursor: "pointer" }}>
       <div style={{ width: 4, background: tc, flexShrink: 0, boxShadow: `1px 0 10px ${tc}40` }} />
       <div style={{ flex: 1, minWidth: 0, padding: "13px 14px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 5 }}>
-          <span style={{ fontSize: 15.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.title}</span>
+          <span style={{ fontSize: 15.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.title}{lessonNo ? ` (${lessonNo}회)` : ""}</span>
           <TypeBadge type={type} />
         </div>
         <div style={{ fontSize: 12.5, color: C.dim, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -974,10 +1029,18 @@ function StudentCard({ s, onClick }) {
 }
 
 function StudentDetail({ st, back }) {
-  const { setD, open } = useApp();
+  const { d, setD, open } = useApp();
+  const [seg, setSeg] = useState("레슨 기록");
   const recs = st.records.slice().sort((a, b) => b.date.localeCompare(a.date));
   const cnt = (k) => st.records.filter((r) => r.status === k).length;
   const delRec = (rid) => setD((s) => ({ ...s, students: s.students.map((x) => (x.id === st.id ? { ...x, records: x.records.filter((r) => r.id !== rid) } : x)) }));
+  const cur = d.settings.curriculum || [];
+  let pIdx = cur.findIndex((c) => c.id === st.progressId);
+  if (pIdx < 0) pIdx = 0;
+  const setPIdx = (i) => {
+    const j = Math.max(0, Math.min(cur.length - 1, i));
+    setD((s) => ({ ...s, students: s.students.map((x) => (x.id === st.id ? { ...x, progressId: cur[j].id } : x)) }));
+  };
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "18px 0 6px", marginLeft: -10 }}>
@@ -995,27 +1058,156 @@ function StudentDetail({ st, back }) {
         <StatCard label="보강" val={`${cnt("보강")}회`} tint={C.gold} />
         <StatCard label="결석" val={`${cnt("결석")}회`} tint={C.red} />
       </div>
-      {recs[0] && recs[0].progress ? (
-        <div style={{ marginTop: 12, borderRadius: 18, border: "1px solid rgba(233,190,88,0.3)", background: C.goldBg, padding: "14px 16px" }}>
-          <div style={{ fontSize: 10.5, fontWeight: 800, color: C.gold, letterSpacing: "0.12em", marginBottom: 6 }}>현재 진도</div>
-          <div style={{ fontSize: 15.5, fontWeight: 700, lineHeight: 1.45 }}>{recs[0].progress}</div>
-        </div>
-      ) : null}
-      <SecLabel right={<button onClick={() => open({ k: "record", init: { studentId: st.id } })} style={{ background: "none", border: "none", color: C.gold, fontSize: 12.5, fontWeight: 800, padding: 4 }}>+ 레슨 기록</button>}>레슨 기록</SecLabel>
-      {recs.length ? recs.map((r) => (
-        <Card key={r.id} style={{ marginBottom: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 800, color: C.dim }}>{fmtKo(r.date)}</span>
-            <span style={{ fontSize: 11, fontWeight: 800, color: ATT[r.status], background: `${ATT[r.status]}1E`, padding: "3px 9px", borderRadius: 100 }}>{r.status}</span>
-            <div style={{ flex: 1 }} />
-            <button className="ib" style={{ padding: 5 }} onClick={() => open({ k: "record", init: { studentId: st.id, id: r.id } })}><Pencil size={14} color={C.faint} /></button>
-            <button className="ib" style={{ padding: 5 }} onClick={() => delRec(r.id)}><Trash2 size={14} color={C.faint} /></button>
+      {cur.length > 0 && (
+        <div style={{ marginTop: 12, borderRadius: 18, border: "1px solid rgba(233,190,88,0.3)", background: C.goldBg, padding: "12px 10px 12px 16px", display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 10.5, fontWeight: 800, color: C.gold, letterSpacing: "0.12em", marginBottom: 5 }}>현재 진도 · 진도표 {pIdx + 1}/{cur.length}</div>
+            <div style={{ fontSize: 15.5, fontWeight: 800, lineHeight: 1.4 }}>{cur[pIdx].name}</div>
           </div>
-          {r.progress && <div style={{ fontSize: 14.5, fontWeight: 700, marginTop: 9 }}>{r.progress}</div>}
-          {r.feedback && <div style={{ fontSize: 13.5, color: C.dim, marginTop: 6, lineHeight: 1.55 }}>{r.feedback}</div>}
-        </Card>
-      )) : <div style={{ color: C.faint, fontSize: 13.5, padding: "6px 4px" }}>첫 레슨 기록을 추가해 보세요.</div>}
-      <FAB onClick={() => open({ k: "record", init: { studentId: st.id } })} />
+          <button className="ib" onClick={() => setPIdx(pIdx - 1)} style={{ opacity: pIdx === 0 ? 0.35 : 1 }}><ChevronLeft size={19} color={C.gold} /></button>
+          <button className="ib" onClick={() => setPIdx(pIdx + 1)} style={{ opacity: pIdx === cur.length - 1 ? 0.35 : 1 }}><ChevronRight size={19} color={C.gold} /></button>
+        </div>
+      )}
+      <div style={{ marginTop: 14 }}>
+        <Seg opts={["레슨 기록", "출석부"]} val={seg} onChange={setSeg} />
+      </div>
+      {seg === "레슨 기록" ? (
+        <>
+          <SecLabel right={<button onClick={() => open({ k: "record", init: { studentId: st.id } })} style={{ background: "none", border: "none", color: C.gold, fontSize: 12.5, fontWeight: 800, padding: 4 }}>+ 레슨 기록</button>}>레슨 기록</SecLabel>
+          {recs.length ? recs.map((r) => (
+            <Card key={r.id} style={{ marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 800, color: C.dim }}>{fmtKo(r.date)}</span>
+                <span style={{ fontSize: 11, fontWeight: 800, color: ATT[r.status], background: `${ATT[r.status]}1E`, padding: "3px 9px", borderRadius: 100 }}>{r.status}</span>
+                <div style={{ flex: 1 }} />
+                <button className="ib" style={{ padding: 5 }} onClick={() => open({ k: "record", init: { studentId: st.id, id: r.id } })}><Pencil size={14} color={C.faint} /></button>
+                <button className="ib" style={{ padding: 5 }} onClick={() => delRec(r.id)}><Trash2 size={14} color={C.faint} /></button>
+              </div>
+              {r.progress && <div style={{ fontSize: 14.5, fontWeight: 700, marginTop: 9 }}>{r.progress}</div>}
+              {r.feedback && <div style={{ fontSize: 13.5, color: C.dim, marginTop: 6, lineHeight: 1.55 }}>{r.feedback}</div>}
+            </Card>
+          )) : <div style={{ color: C.faint, fontSize: 13.5, padding: "6px 4px" }}>첫 레슨 기록을 추가해 보세요.</div>}
+          <FAB onClick={() => open({ k: "record", init: { studentId: st.id } })} />
+        </>
+      ) : (
+        <AttendanceView st={st} />
+      )}
+    </>
+  );
+}
+
+/* 출석부: 날짜 × 회차 표 · 결석 시 캘린더 일정 삭제 + 회차 재조정 + 입금 재계산 */
+function AttendanceView({ st }) {
+  const { d, setD, show } = useApp();
+  const [ask, setAsk] = useState(null);
+  const lessonIds = d.settings.eventTypes.filter(isLessonType).map((t) => t.id);
+  const lessons = d.events.filter((e) => e.studentId === st.id && lessonIds.includes(e.typeId)).slice().sort((a, b) => a.date.localeCompare(b.date));
+  const cols = [
+    ...lessons.map((e) => ({ key: "e" + e.id, date: e.date, evId: e.id })),
+    ...(st.absents || []).map((a) => ({ key: "a" + a.id, date: a.date, absentId: a.id })),
+  ].sort((a, b) => a.date.localeCompare(b.date));
+  const att = st.att || {};
+  const markOf = (c) => (c.absentId ? "X" : att[c.date] === "O" ? "O" : "");
+  const markPresent = (c) => {
+    setD((s) => ({ ...s, students: s.students.map((x) => (x.id === st.id ? { ...x, att: { ...(x.att || {}), [c.date]: "O" } } : x)) }));
+    setAsk(null); show("출석 처리했어요");
+  };
+  const clearMark = (c) => {
+    setD((s) => ({ ...s, students: s.students.map((x) => { if (x.id !== st.id) return x; const a2 = { ...(x.att || {}) }; delete a2[c.date]; return { ...x, att: a2 }; }) }));
+    setAsk(null); show("기록을 지웠어요");
+  };
+  const removeAbsent = (c) => {
+    setD((s) => ({ ...s, students: s.students.map((x) => (x.id === st.id ? { ...x, absents: (x.absents || []).filter((a) => a.id !== c.absentId) } : x)) }));
+    setAsk(null); show("결석 기록을 삭제했어요 (일정은 복구되지 않아요)");
+  };
+  const markAbsent = (c) => {
+    setD((s) => {
+      const ev = s.events.find((e) => e.id === c.evId);
+      let events = s.events, transactions = s.transactions;
+      if (ev) {
+        events = events.filter((e) => e.id !== ev.id);
+        transactions = transactions.filter((t) => t.eventId !== ev.id);
+        /* 입금 주기 패턴 재적용: 남은 회차를 다시 1회부터 세어 입금 위치 재계산 */
+        if (ev.groupId && ev.payCycle && ev.payAmount > 0) {
+          const feeById = {};
+          events.filter((e) => e.groupId === ev.groupId).slice().sort((a, b) => a.date.localeCompare(b.date))
+            .forEach((e, i) => { feeById[e.id] = payOnSeq(i + 1, ev.payCycle) ? ev.payAmount : 0; });
+          events = events.map((e) => {
+            const nf = feeById[e.id];
+            if (nf === undefined || nf === e.fee) return e;
+            return { ...e, fee: nf, paid: nf > 0 ? e.paid : false, paidDate: nf > 0 ? e.paidDate : "" };
+          });
+          transactions = transactions.filter((t) => {
+            if (!t.eventId) return true;
+            const nf = feeById[t.eventId];
+            return nf === undefined || nf > 0;
+          });
+        }
+      }
+      const students = s.students.map((x) => (x.id === st.id ? { ...x, absents: [...(x.absents || []), { id: uid(), date: c.date }] } : x));
+      return { ...s, events, transactions, students };
+    });
+    setAsk(null); show("결석 처리 · 일정 삭제와 회차 재조정을 했어요");
+  };
+  return (
+    <>
+      <SecLabel>출석부</SecLabel>
+      {cols.length ? (
+        <>
+          <Card style={{ padding: "13px 10px", overflowX: "auto" }}>
+            <div style={{ minWidth: 46 + cols.length * 46 }}>
+              <div style={{ display: "flex", marginBottom: 4 }}>
+                <div style={{ width: 46, flexShrink: 0 }} />
+                {cols.map((c) => {
+                  const dt = parseKey(c.date);
+                  return <div key={c.key} style={{ width: 46, flexShrink: 0, textAlign: "center", fontSize: 11, fontWeight: 800, color: c.date === todayKey() ? C.gold : C.faint }}>{dt.getMonth() + 1}/{dt.getDate()}</div>;
+                })}
+              </div>
+              {cols.map((rc, i) => (
+                <div key={rc.key} style={{ display: "flex", alignItems: "center", borderTop: `1px solid ${C.line}` }}>
+                  <div style={{ width: 46, flexShrink: 0, fontSize: 11.5, fontWeight: 800, color: C.dim, padding: "9px 0" }}>{i + 1}회</div>
+                  {cols.map((c, j) => (
+                    <div key={c.key} style={{ width: 46, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: "5px 0" }}>
+                      {j === i ? (
+                        <button className="press" onClick={() => setAsk(c)} style={{ width: 32, height: 32, borderRadius: 10, border: `1.5px solid ${markOf(c) === "O" ? "rgba(76,201,166,0.5)" : markOf(c) === "X" ? "rgba(229,107,87,0.5)" : C.line2}`, background: markOf(c) === "O" ? C.tealBg : markOf(c) === "X" ? C.redBg : "transparent", color: markOf(c) === "O" ? C.teal : markOf(c) === "X" ? C.red : C.faint, fontSize: 13.5, fontWeight: 800 }}>{markOf(c) || "·"}</button>
+                      ) : (
+                        <span style={{ color: C.line2, fontSize: 12 }}>-</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </Card>
+          <div style={{ fontSize: 12, color: C.faint, padding: "8px 4px 0", lineHeight: 1.6 }}>셀을 누르면 출석(O)/결석(X)을 기록해요. 결석 처리하면 캘린더에서 그 날짜 레슨이 삭제되고 이후 회차가 자동으로 재조정돼요 — 입금 주기 패턴도 새 회차 기준으로 다시 적용돼요.</div>
+        </>
+      ) : (
+        <Empty Icon={CalendarDays} title="예정된 레슨이 없어요" sub="캘린더에서 레슨 일정을 만들 때 학생을 연결하면 출석부가 자동으로 만들어져요" />
+      )}
+      {ask && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div onClick={() => setAsk(null)} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.62)", animation: "fade .15s ease" }} />
+          <div style={{ position: "relative", width: "100%", maxWidth: 340, background: "#14120B", border: `1px solid ${C.line2}`, borderRadius: 20, padding: 18, animation: "up .2s cubic-bezier(.2,.9,.3,1)" }}>
+            <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 6 }}>{fmtKo(ask.date)} · {st.name}</div>
+            {ask.absentId ? (
+              <>
+                <div style={{ fontSize: 12.5, color: C.dim, lineHeight: 1.6, marginBottom: 14 }}>결석으로 기록된 날이에요. 기록을 삭제해도 삭제된 일정은 복구되지 않아요.</div>
+                <Btn kind="d" style={{ width: "100%", marginBottom: 8 }} onClick={() => removeAbsent(ask)}>결석 기록 삭제</Btn>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 12.5, color: C.dim, lineHeight: 1.6, marginBottom: 14 }}>결석(X)을 선택하면 캘린더에서 이 날짜 레슨이 삭제되고 이후 회차가 재조정돼요.</div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  <Btn style={{ flex: 1, background: C.tealBg, color: C.teal, border: "1px solid rgba(76,201,166,0.4)" }} onClick={() => markPresent(ask)}>출석 O</Btn>
+                  <Btn kind="d" style={{ flex: 1 }} onClick={() => markAbsent(ask)}>결석 X</Btn>
+                </div>
+                {markOf(ask) === "O" && <Btn kind="g" style={{ width: "100%", marginBottom: 8 }} onClick={() => clearMark(ask)}>출석 기록 지우기</Btn>}
+              </>
+            )}
+            <Btn kind="g" style={{ width: "100%" }} onClick={() => setAsk(null)}>닫기</Btn>
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -1024,57 +1216,15 @@ function StudentDetail({ st, back }) {
 function PracticeTab() {
   const { d } = useApp();
   const P = pracNamesOf(d.settings);
-  const keys = ["tasks", "routine", "journal"];
+  const keys = ["routine", "memo"];
   const labels = keys.map((k) => P[k]);
-  const [segK, setSegK] = useState("tasks");
+  const [segK, setSegK] = useState("routine");
   return (
     <>
-      <TabTitle title="연습" sub={`${P.tasks} · ${P.routine} · ${P.journal}`} />
-      <Seg opts={labels} val={P[segK]} onChange={(l) => setSegK(keys[labels.indexOf(l)] || "tasks")} />
-      {segK === "tasks" && <TasksView />}
+      <TabTitle title="연습" sub={`${P.routine} · ${P.memo}`} />
+      <Seg opts={labels} val={P[segK]} onChange={(l) => setSegK(keys[labels.indexOf(l)] || "routine")} />
       {segK === "routine" && <RoutineView />}
-      {segK === "journal" && <JournalView />}
-    </>
-  );
-}
-
-function TasksView() {
-  const { d, setD, open, rename } = useApp();
-  const [showDone, setShowDone] = useState(false);
-  const act = d.tasks.filter((t) => !t.done);
-  const done = d.tasks.filter((t) => t.done);
-  const toggle = (id) => setD((s) => ({ ...s, tasks: s.tasks.map((t) => (t.id === id ? { ...t, done: !t.done } : t)) }));
-  const row = (t) => (
-    <Card key={t.id} onClick={() => open({ k: "task", init: { id: t.id } })} style={{ marginBottom: 10, opacity: t.done ? 0.55 : 1 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-        <button className="ib" style={{ padding: 2, marginLeft: -2 }} onClick={(e) => { e.stopPropagation(); toggle(t.id); }}>
-          {t.done ? <CheckCircle2 size={22} color={C.teal} /> : <Circle size={22} color={C.line2} />}
-        </button>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, textDecoration: t.done ? "line-through" : "none" }}>{t.title}</div>
-          {t.pos && <div style={{ fontSize: 12.5, color: C.gold, fontWeight: 700, marginTop: 3 }}>▸ {t.pos}</div>}
-        </div>
-      </div>
-      {t.memo && <div style={{ fontSize: 12.5, color: C.faint, marginTop: 8, lineHeight: 1.5 }}>{t.memo}</div>}
-    </Card>
-  );
-  return (
-    <>
-      <div style={{ marginTop: 16 }}>
-        {act.length ? (
-          <DragList items={act} idOf={(t) => t.id}
-            onSort={(arr) => setD((s) => ({ ...s, tasks: [...arr, ...s.tasks.filter((t) => t.done)] }))}
-            onLongPress={(t) => rename({ title: "과제 이름 수정", value: t.title, onSave: (n) => setD((s) => ({ ...s, tasks: s.tasks.map((y) => (y.id === t.id ? { ...y, title: n } : y)) })) })}
-            render={(t) => row(t)} />
-        ) : <Empty Icon={Target} title="진행 중인 과제가 없어요" sub="+ 버튼으로 연습 과제를 추가하고 현재 위치를 기록해요" />}
-        {done.length > 0 && (
-          <>
-            <button onClick={() => setShowDone(!showDone)} style={{ background: "none", border: "none", color: C.faint, fontSize: 12.5, fontWeight: 800, padding: "8px 2px" }}>완료한 과제 {done.length}개 {showDone ? "접기" : "보기"}</button>
-            {showDone && done.map(row)}
-          </>
-        )}
-      </div>
-      <FAB onClick={() => open({ k: "task" })} />
+      {segK === "memo" && <MemoView />}
     </>
   );
 }
@@ -1083,7 +1233,6 @@ function RoutineView() {
   const { d, setD, open, rename } = useApp();
   const tk = todayKey();
   const checks = d.routineChecks[tk] || [];
-  const total = d.routine.reduce((s, b) => s + (b.min || 0), 0);
   const toggle = (id) => setD((s) => {
     const cur = s.routineChecks[tk] || [];
     const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
@@ -1097,10 +1246,10 @@ function RoutineView() {
           <Card>
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 13 }}>
               <div style={{ fontSize: 15.5, fontWeight: 800 }}>오늘의 {pracNamesOf(d.settings).routine}</div>
-              <div style={{ fontSize: 13, fontWeight: 800, color: checks.length === d.routine.length ? C.teal : C.gold }}>{checks.length}/{d.routine.length} · 총 {total}분</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: checks.length === d.routine.length ? C.teal : C.gold }}>{checks.length}/{d.routine.length}</div>
             </div>
             <div style={{ display: "flex", height: 18, gap: 3 }}>
-              {d.routine.map((b) => <div key={b.id} style={{ flex: Math.max(b.min || 1, 1), background: b.color, opacity: checks.includes(b.id) ? 1 : 0.22, transition: "opacity .25s, box-shadow .25s", borderRadius: 5, boxShadow: checks.includes(b.id) ? `0 0 12px ${b.color}55` : "none" }} />)}
+              {d.routine.map((b) => <div key={b.id} style={{ flex: 1, background: b.color, opacity: checks.includes(b.id) ? 1 : 0.22, transition: "opacity .25s, box-shadow .25s", borderRadius: 5, boxShadow: checks.includes(b.id) ? `0 0 12px ${b.color}55` : "none" }} />)}
             </div>
             <div style={{ marginTop: 6 }}>
               <DragList items={d.routine} idOf={(b) => b.id}
@@ -1111,10 +1260,7 @@ function RoutineView() {
                     <button className="ib" style={{ padding: 2 }} onClick={() => toggle(b.id)}>
                       {checks.includes(b.id) ? <CheckCircle2 size={21} color={b.color} /> : <Circle size={21} color={C.line2} />}
                     </button>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 14.5, fontWeight: 700, color: checks.includes(b.id) ? C.dim : C.text, textDecoration: checks.includes(b.id) ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.label}</div>
-                      <div style={{ fontSize: 11.5, color: C.faint, fontWeight: 700, marginTop: 2 }}>{b.min}분</div>
-                    </div>
+                    <div style={{ flex: 1, minWidth: 0, fontSize: 14.5, fontWeight: 700, color: checks.includes(b.id) ? C.dim : C.text, textDecoration: checks.includes(b.id) ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.label}</div>
                     <button className="ib" style={{ padding: 4 }} onClick={() => open({ k: "block", init: { id: b.id } })}><Pencil size={14} color={C.faint} /></button>
                   </div>
                 )} />
@@ -1145,35 +1291,78 @@ function RoutineView() {
   );
 }
 
-function JournalView() {
-  const { d, setD, open, rename } = useApp();
-  const [f, setF] = useState("전체");
-  const kinds = d.settings.journalKinds || [];
-  const colorOf = (name) => { const k = kinds.find((x) => x.name === name); return k ? k.color : C.gray; };
-  const list = f === "전체" ? d.journal : d.journal.filter((j) => j.kind === f);
+/* 메모: 블록식 · 블록별 날짜 메모 */
+function MemoView() {
+  const { d, setD, show, rename } = useApp();
+  const [bid, setBid] = useState(null);
+  const [armDel, setArmDel] = useState(null);
+  const blocks = d.memoBlocks || [];
+  const cur = bid ? blocks.find((b) => b.id === bid) : null;
+  useEffect(() => { if (bid && !cur) setBid(null); }, [bid, cur]);
+  useEffect(() => { if (!armDel) return; const t = setTimeout(() => setArmDel(null), 2600); return () => clearTimeout(t); }, [armDel]);
+  const memosOf = (id) => (d.memos || []).filter((m) => m.blockId === id);
+  const addBlock = () => rename({ title: "새 메모 블록", value: "", onSave: (n) => setD((s) => ({ ...s, memoBlocks: [...(s.memoBlocks || []), { id: uid(), name: n }] })) });
+  const delBlock = (b) => {
+    if (armDel !== b.id) { setArmDel(b.id); show("한 번 더 누르면 블록과 메모가 삭제돼요"); return; }
+    setArmDel(null);
+    setD((s) => ({ ...s, memoBlocks: (s.memoBlocks || []).filter((x) => x.id !== b.id), memos: (s.memos || []).filter((m) => m.blockId !== b.id) }));
+    show("메모 블록을 삭제했어요");
+  };
+  if (cur) return <MemoBlockDetail block={cur} back={() => setBid(null)} />;
   return (
     <>
-      <div style={{ display: "flex", gap: 7, marginTop: 16, overflowX: "auto", paddingBottom: 2 }}>
-        {["전체", ...kinds.map((x) => x.name)].map((k) => <Chip key={k} on={f === k} color={k === "전체" ? undefined : colorOf(k)} onClick={() => setF(k)}>{k}</Chip>)}
+      <div style={{ display: "flex", justifyContent: "flex-end", margin: "14px 0 4px" }}>
+        <button className="press" onClick={addBlock} style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 13px", borderRadius: 100, border: "1px solid rgba(233,190,88,0.35)", background: C.goldBg, color: C.gold, fontSize: 12.5, fontWeight: 800 }}><Plus size={13} />블록 추가</button>
       </div>
-      <div style={{ marginTop: 12 }}>
-        {list.length ? (
-          <DragList items={list} idOf={(j) => j.id}
-            onSort={f === "전체" ? (arr) => setD((s) => ({ ...s, journal: arr })) : null}
-            onLongPress={(j) => rename({ title: "제목 수정", value: j.title || "", onSave: (n) => setD((s) => ({ ...s, journal: s.journal.map((y) => (y.id === j.id ? { ...y, title: n } : y)) })) })}
-            render={(j) => (
-              <Card onClick={() => open({ k: "journal", init: { id: j.id } })} style={{ marginBottom: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
-                  <span style={{ fontSize: 12.5, fontWeight: 800, color: C.dim }}>{fmtKo(j.date)}</span>
-                  <span style={{ fontSize: 11, fontWeight: 800, color: colorOf(j.kind), background: `${colorOf(j.kind)}1E`, padding: "3px 9px", borderRadius: 100 }}>{j.kind}</span>
+      {blocks.length ? (
+        <DragList items={blocks} idOf={(b) => b.id}
+          onSort={(arr) => setD((s) => ({ ...s, memoBlocks: arr }))}
+          onLongPress={(b) => rename({ title: "블록 이름 수정", value: b.name, onSave: (n) => setD((s) => ({ ...s, memoBlocks: s.memoBlocks.map((y) => (y.id === b.id ? { ...y, name: n } : y)) })) })}
+          render={(b) => {
+            const ms = memosOf(b.id);
+            const last = ms[0];
+            return (
+              <Card onClick={() => setBid(b.id)} style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 15.5, fontWeight: 800 }}>{b.name}</span>
+                    <span style={{ fontSize: 11.5, fontWeight: 800, color: C.gold, background: C.goldBg, padding: "2px 8px", borderRadius: 100 }}>{ms.length}</span>
+                  </div>
+                  <div style={{ fontSize: 12.5, color: C.dim, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {last ? `${fmtKo(last.date)} · ${last.text.split("\n")[0]}` : "아직 메모가 없어요 · 눌러서 기록 시작"}
+                  </div>
                 </div>
-                {j.title && <div style={{ fontSize: 15.5, fontWeight: 800, marginBottom: 5 }}>{j.title}</div>}
-                <div style={{ fontSize: 13.5, color: C.dim, lineHeight: 1.6, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{j.content}</div>
+                <button className="ib" style={{ padding: 5, flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); delBlock(b); }}><X size={16} color={armDel === b.id ? C.red : C.faint} /></button>
               </Card>
-            )} />
-        ) : <Empty Icon={FileText} title="아직 기록이 없어요" sub="연습 중 깨달은 것, 공연의 감각을 짧게라도 남겨 보세요" />}
+            );
+          }} />
+      ) : <Empty Icon={FileText} title="메모 블록이 없어요" sub="'블록 추가'로 느낀점 · 현재구간 · 다음목표 같은 블록을 만들어 보세요" />}
+    </>
+  );
+}
+
+function MemoBlockDetail({ block, back }) {
+  const { d, setD, open } = useApp();
+  const list = (d.memos || []).filter((m) => m.blockId === block.id);
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "16px 0 8px", marginLeft: -10 }}>
+        <button className="ib" onClick={back}><ChevronLeft size={22} color={C.dim} /></button>
+        <div style={{ flex: 1, fontSize: 19, fontWeight: 800 }}>{block.name}</div>
+        <button onClick={() => open({ k: "memo", init: { blockId: block.id } })} style={{ background: "none", border: "none", color: C.gold, fontSize: 12.5, fontWeight: 800, padding: 4 }}>+ 메모 추가</button>
       </div>
-      <FAB onClick={() => open({ k: "journal" })} />
+      {list.length ? (
+        <DragList items={list} idOf={(m) => m.id}
+          onSort={(arr) => setD((s) => ({ ...s, memos: [...arr, ...(s.memos || []).filter((m) => m.blockId !== block.id)] }))}
+          onLongPress={(m) => open({ k: "memo", init: { id: m.id } })}
+          render={(m) => (
+            <Card onClick={() => open({ k: "memo", init: { id: m.id } })} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 800, color: C.gold, marginBottom: 6 }}>{fmtKo(m.date)}</div>
+              <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{m.text}</div>
+            </Card>
+          )} />
+      ) : <Empty Icon={FileText} title="아직 메모가 없어요" sub="날짜별로 이 블록의 기록을 남겨 보세요" />}
+      <FAB onClick={() => open({ k: "memo", init: { blockId: block.id } })} />
     </>
   );
 }
@@ -1298,7 +1487,7 @@ function LedgerView() {
 function EventSheet({ init }) {
   const { d, setD, close, show, rename } = useApp();
   const editing = init && init.id ? d.events.find((e) => e.id === init.id) : null;
-  const perfDefaults = { callTime: "", showTime: "", ensemble: "", leader: "", members: [], teamNameOn: false, teamName: "" };
+  const perfDefaults = { callTime: "", showTime: "", ensemble: "", leader: "", members: [], teamNameOn: false, teamName: "", studentId: "", payCycleKey: "" };
   const [f, setF] = useState(() => editing
     ? { ...perfDefaults, ...editing, fee: editing.fee ? fmtNum(editing.fee) : "" }
     : { title: "", typeId: (init && init.typeId) || d.settings.eventTypes[0].id, date: (init && init.date) || todayKey(), time: "", venue: (init && init.venue) || "", fee: "", memo: "", paid: false, repeat: "없음", ...perfDefaults });
@@ -1308,35 +1497,43 @@ function EventSheet({ init }) {
   const REPN = { "매주": 26, "2주마다": 13, "매월": 6 };
   const repN = repeating ? (REPN[f.repeat] || 8) : 1;
   const curType = d.settings.eventTypes.find((t) => t.id === f.typeId);
-  const isLesson = !!curType && (curType.id === "t_lesson" || (curType.name || "").includes("레슨"));
+  const isLesson = isLessonType(curType);
   const isPerf = !!curType && !!curType.perf;
   const ensembles = d.settings.ensembles || [];
   const instList = d.settings.instruments || [];
   const setMember = (id, p) => setF((s) => ({ ...s, members: s.members.map((m) => (m.id === id ? { ...m, ...p } : m)) }));
-  const feeCycle = repeating && isLesson ? (f.repeat === "매주" ? 4 : f.repeat === "2주마다" ? 2 : 1) : 1;
+  const needCycle = isLesson && repeating && (f.repeat === "매주" || f.repeat === "2주마다");
+  const pc = needCycle ? PAY_CYCLES.find((p) => p.key === f.payCycleKey) || null : null;
   const groupCnt = editing && editing.groupId ? d.events.filter((e) => e.groupId === editing.groupId).length : 0;
   const futureCnt = editing && editing.groupId ? d.events.filter((e) => e.groupId === editing.groupId && e.date >= editing.date).length : 0;
   const [ask, setAsk] = useState(null);
   const doSave = (applyFuture) => {
     if (!f.date) return;
+    if (needCycle && fee > 0 && !pc) { show("입금 주기를 선택해 주세요"); return; }
     const gid = repeating ? "g" + uid() : (editing ? editing.groupId : undefined);
+    const evFee = needCycle ? (pc && payOnSeq(1, pc) ? fee : 0) : fee;
     const ev = {
       id: editing ? editing.id : uid(),
       title: (f.title || "").trim() || "제목 없는 일정",
       typeId: f.typeId, date: f.date, time: snap5(f.time || ""),
       venue: (f.venue || "").trim(), memo: (f.memo || "").trim(),
-      fee, paid: fee > 0 && !repeating ? !!f.paid : false,
-      paidDate: fee > 0 && !repeating && f.paid ? (editing && editing.paid && editing.paidDate ? editing.paidDate : todayKey()) : "",
+      fee: evFee, paid: evFee > 0 && !repeating ? !!f.paid : false,
+      paidDate: evFee > 0 && !repeating && f.paid ? (editing && editing.paid && editing.paidDate ? editing.paidDate : todayKey()) : "",
       groupId: gid,
       callTime: snap5(f.callTime || ""), showTime: snap5(f.showTime || ""),
       ensemble: f.ensemble || "", leader: (f.leader || "").trim(),
       members: (f.members || []).map((m) => ({ ...m, name: (m.name || "").trim() })).filter((m) => m.name),
       teamNameOn: !!f.teamNameOn, teamName: (f.teamName || "").trim(),
+      studentId: f.studentId || "",
+      payCycle: editing ? editing.payCycle : (pc ? { n: pc.n, at: pc.at } : undefined),
+      payAmount: editing
+        ? (editing.payAmount !== undefined ? (fee > 0 ? fee : editing.payAmount) : undefined)
+        : (needCycle && pc ? fee : undefined),
     };
     const extras = [];
     if (repeating) {
       for (let i = 1; i < repN; i++) {
-        extras.push({ ...ev, id: uid(), date: repShift(ev.date, f.repeat, i), fee: feeCycle > 1 && i % feeCycle !== 0 ? 0 : fee });
+        extras.push({ ...ev, id: uid(), date: repShift(ev.date, f.repeat, i), fee: needCycle ? (pc && payOnSeq(i + 1, pc) ? fee : 0) : fee });
       }
     }
     setD((s) => {
@@ -1346,7 +1543,7 @@ function EventSheet({ init }) {
           if (e.id === ev.id) return ev;
           if (applyFuture && gid && e.groupId === gid && e.date >= editing.date) {
             const nf = e.fee > 0 ? ev.fee : e.fee;
-            return { ...e, title: ev.title, typeId: ev.typeId, time: ev.time, venue: ev.venue, memo: ev.memo, fee: nf, paid: nf > 0 ? e.paid : false, paidDate: nf > 0 ? e.paidDate : "", callTime: ev.callTime, showTime: ev.showTime, ensemble: ev.ensemble, leader: ev.leader, members: ev.members, teamNameOn: ev.teamNameOn, teamName: ev.teamName };
+            return { ...e, title: ev.title, typeId: ev.typeId, time: ev.time, venue: ev.venue, memo: ev.memo, fee: nf, paid: nf > 0 ? e.paid : false, paidDate: nf > 0 ? e.paidDate : "", callTime: ev.callTime, showTime: ev.showTime, ensemble: ev.ensemble, leader: ev.leader, members: ev.members, teamNameOn: ev.teamNameOn, teamName: ev.teamName, studentId: ev.studentId };
           }
           return e;
         });
@@ -1418,6 +1615,15 @@ function EventSheet({ init }) {
           {d.settings.eventTypes.map((t) => <Chip key={t.id} on={f.typeId === t.id} color={t.color} onClick={() => u({ typeId: t.id })}>{t.name}</Chip>)}
         </div>
       </Fld>
+      {isLesson && d.students.length > 0 && (
+        <Fld label="학생 연결">
+          <select className="inp" value={f.studentId || ""} onChange={(e) => u({ studentId: e.target.value })}>
+            <option value="">선택 안 함</option>
+            {d.students.map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}
+          </select>
+          <div style={{ fontSize: 11.5, color: C.faint, marginTop: 7, lineHeight: 1.5 }}>학생을 연결하면 레슨 탭의 출석부에 자동으로 나타나요.</div>
+        </Fld>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <Fld label="날짜"><input className="inp" type="date" value={f.date} onChange={(e) => u({ date: e.target.value })} /></Fld>
         <Fld label="시간"><TimeInp value={f.time} onChange={(v) => u({ time: v })} /></Fld>
@@ -1433,6 +1639,19 @@ function EventSheet({ init }) {
         <div style={{ fontSize: 12, color: C.faint, margin: "-6px 2px 15px", lineHeight: 1.6 }}>
           {fmtKo(f.date)}부터 약 6개월치가 자동으로 만들어져요 (마지막 {fmtKo(repShift(f.date, f.repeat, repN - 1))}). 하나를 열어 삭제 · 수정할 때 이후 반복까지 한 번에 처리할 수 있어요.
         </div>
+      )}
+      {needCycle && (
+        <Fld label="입금 주기 (필수 · 저장 후 변경 불가)">
+          <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+            {PAY_CYCLES.map((p) => <Chip key={p.key} on={f.payCycleKey === p.key} onClick={() => u({ payCycleKey: p.key })}>{p.label}</Chip>)}
+          </div>
+          <div style={{ fontSize: 11.5, color: C.faint, marginTop: 7, lineHeight: 1.5 }}>
+            {f.payCycleKey === "2s" ? "1 · 3 · 5회... 회차에 입금이 잡혀요." : f.payCycleKey === "2e" ? "2 · 4 · 6회... 회차에 입금이 잡혀요." : f.payCycleKey === "4s" ? "1 · 5 · 9회... 회차에 입금이 잡혀요." : f.payCycleKey === "4e" ? "4 · 8 · 12회... 회차에 입금이 잡혀요." : "결석으로 회차가 재조정돼도 이 패턴은 새 회차 기준으로 자동 유지돼요."}
+          </div>
+        </Fld>
+      )}
+      {editing && editing.payCycle && (
+        <div style={{ fontSize: 12, color: C.faint, margin: "-6px 2px 15px", lineHeight: 1.5 }}>입금 주기: {payCycleLabel(editing.payCycle) || `${editing.payCycle.n}회 ${editing.payCycle.at === "start" ? "시작" : "끝날"} 시 입금`} · 변경 불가</div>
       )}
       <Fld label="장소"><input className="inp" placeholder="베뉴 · 연습실 이름" value={f.venue} onChange={(e) => u({ venue: e.target.value })} /></Fld>
       {isPerf && (
@@ -1489,13 +1708,11 @@ function EventSheet({ init }) {
           </Fld>
         </>
       )}
-      <Fld label={repeating && isLesson ? (feeCycle > 1 ? `레슨비 (${feeCycle}회 기준)` : "레슨비 (매회 기준)") : "페이"}>
+      <Fld label={isLesson && repeating ? (needCycle ? "레슨비 (1회 입금액)" : "레슨비 (매회 기준)") : "페이"}>
         <MoneyInp value={f.fee} onChange={(v) => u({ fee: v })} />
-        {repeating && isLesson && fee > 0 && (
+        {isLesson && repeating && fee > 0 && (
           <div style={{ fontSize: 12, color: C.faint, marginTop: 7, lineHeight: 1.55 }}>
-            {feeCycle > 1
-              ? `매주 레슨은 4회, 2주마다 레슨은 2회 기준이에요 — 레슨비가 ${feeCycle}회마다 각 구간의 첫 레슨에 한 번씩 입금 목록에 잡혀요.`
-              : "매월 레슨은 매회 레슨비가 입금 목록에 잡혀요."}
+            {needCycle ? "위에서 선택한 입금 주기의 회차에만 입금 목록에 잡혀요." : "매월 레슨은 매회 레슨비가 입금 목록에 잡혀요."}
           </div>
         )}
       </Fld>
@@ -1518,31 +1735,33 @@ function ExtractSheet() {
   const { d, close, show } = useApp();
   const [cur, setCur] = useState(nowYM);
   const [ids, setIds] = useState(() => d.settings.eventTypes.filter((t) => t.perf).map((t) => t.id));
-  const [withMembers, setWithMembers] = useState(false);
   const toggleId = (id) => setIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   const mk = `${cur.y}-${pad(cur.m + 1)}`;
   const text = useMemo(() => {
     const evs = d.events.filter((e) => e.date.startsWith(mk) && ids.includes(e.typeId)).slice().sort(byDT);
     if (!evs.length) return "";
+    /* 팀명: 직접입력 ON이면 그 이름, OFF면 리더+연주인원 영문명 (예: 리더QUINTET) */
+    const teamOf = (e) => {
+      if (e.teamNameOn && (e.teamName || "").trim()) return e.teamName.trim();
+      const en0 = e.ensemble ? (d.settings.ensembles || []).find((x) => x.name === e.ensemble) : null;
+      const enName = en0 ? (en0.en || ENBY[en0.size] || en0.name) : (e.ensemble || "");
+      const leader = (e.leader || "").trim();
+      return leader || enName ? `${leader}${enName}` : "";
+    };
     let out = `🥁 ${cur.m + 1}월 연주 일정`;
     evs.forEach((e) => {
-      const team = e.teamNameOn && (e.teamName || "").trim() ? e.teamName.trim() : (e.ensemble || "");
-      const hasCS = !!(e.callTime || e.showTime);
-      out += `\n\n${fmtKo(e.date)}${!hasCS && e.time ? " " + e.time : ""}`;
-      out += `\n${[e.venue, e.title].filter(Boolean).join(" · ")}${team ? ` [${team}]` : ""}`;
-      if (hasCS) {
-        const ps = [];
-        if (e.callTime) ps.push(`콜타임 ${e.callTime}`);
-        if (e.showTime) ps.push(`공연 ${e.showTime}`);
-        out += `\n${ps.join(" · ")}`;
-      }
-      if (withMembers) {
-        if ((e.leader || "").trim()) out += `\n리더 ${e.leader.trim()}`;
-        if (e.members && e.members.length) out += `\n${e.members.map((m) => `${m.inst} ${m.name}`.trim()).join(" · ")}`;
-      }
+      const t0 = e.showTime || e.time;
+      out += `\n\n${fmtKo(e.date)}${t0 ? " " + fmtK12(t0) : ""}`;
+      if (e.venue) out += `\n@${e.venue}`;
+      const team = teamOf(e);
+      const mem = (e.members || []).map((m) => `${m.inst} ${m.name}`.trim()).join(", ");
+      if (team && mem) out += `\n${team}: ${mem}`;
+      else if (team) out += `\n${team}`;
+      else if (mem) out += `\n${mem}`;
+      else out += `\n${e.title}`;
     });
     return out;
-  }, [d.events, mk, ids, cur.m, withMembers]);
+  }, [d.events, d.settings.ensembles, mk, ids, cur.m]);
   const copy = async () => {
     if (!text) return;
     try {
@@ -1563,10 +1782,6 @@ function ExtractSheet() {
           {d.settings.eventTypes.map((t) => <Chip key={t.id} on={ids.includes(t.id)} color={t.color} onClick={() => toggleId(t.id)}>{t.name}</Chip>)}
         </div>
       </Fld>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.card2, borderRadius: 13, padding: "11px 15px", marginBottom: 15, gap: 10 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 700 }}>리더 · 멤버 포함</div>
-        <Toggle small on={withMembers} onChange={setWithMembers} />
-      </div>
       <Lab>미리보기</Lab>
       <div style={{ background: C.card2, border: `1px solid ${C.line2}`, borderRadius: 13, padding: 15, fontSize: 14, lineHeight: 1.7, whiteSpace: "pre-wrap", color: text ? C.text : C.faint, minHeight: 110 }}>
         {text || "이 달에는 선택한 유형의 일정이 없어요."}
@@ -1667,43 +1882,16 @@ function RecordSheet({ init }) {
   );
 }
 
-/* ───────────── 시트: 연습 과제 ───────────── */
-function TaskSheet({ init }) {
-  const { d, setD, close, show } = useApp();
-  const editing = init && init.id ? d.tasks.find((t) => t.id === init.id) : null;
-  const P = pracNamesOf(d.settings);
-  const [f, setF] = useState(() => editing ? { ...editing } : { title: "", pos: "", progress: 0, memo: "", done: false });
-  const u = (p) => setF((s) => ({ ...s, ...p }));
-  const save = () => {
-    if (!f.title.trim()) return;
-    const t = { ...f, id: editing ? editing.id : uid(), title: f.title.trim(), progress: Number(f.progress) || 0 };
-    setD((s) => ({ ...s, tasks: editing ? s.tasks.map((x) => (x.id === t.id ? t : x)) : [t, ...s.tasks] }));
-    close(); show("과제를 저장했어요");
-  };
-  const del = () => { setD((s) => ({ ...s, tasks: s.tasks.filter((x) => x.id !== editing.id) })); close(); show("과제를 삭제했어요"); };
-  return (
-    <Sheet title={editing ? `${P.tasks} 수정` : `${P.tasks} 추가`} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!f.title.trim()}>저장</Btn></>}>
-      <Fld label="과제"><input className="inp" placeholder="예) Groove Essentials 12번" value={f.title} onChange={(e) => u({ title: e.target.value })} /></Fld>
-      <Fld label="현재 위치"><input className="inp" placeholder="예) 패턴 8까지 · 현재 160bpm" value={f.pos} onChange={(e) => u({ pos: e.target.value })} /></Fld>
-      <Fld label="메모"><textarea className="inp" rows={3} placeholder="템포 목표, 막히는 부분..." value={f.memo} onChange={(e) => u({ memo: e.target.value })} /></Fld>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.card2, borderRadius: 13, padding: "13px 15px" }}>
-        <div style={{ fontSize: 14, fontWeight: 700 }}>완료 처리</div>
-        <Toggle on={!!f.done} onChange={(v) => u({ done: v })} />
-      </div>
-    </Sheet>
-  );
-}
-
 /* ───────────── 시트: 루틴 블록 ───────────── */
 function BlockSheet({ init }) {
   const { d, setD, close, show } = useApp();
   const editing = init && init.id ? d.routine.find((b) => b.id === init.id) : null;
   const P = pracNamesOf(d.settings);
-  const [f, setF] = useState(() => editing ? { ...editing, min: String(editing.min) } : { label: "", min: "20", color: PALETTE[d.routine.length % PALETTE.length] });
+  const [f, setF] = useState(() => editing ? { ...editing } : { label: "", color: PALETTE[d.routine.length % PALETTE.length] });
   const u = (p) => setF((s) => ({ ...s, ...p }));
   const save = () => {
     if (!f.label.trim()) return;
-    const b = { id: editing ? editing.id : uid(), label: f.label.trim(), min: parseNum(f.min) || 10, color: f.color };
+    const b = { id: editing ? editing.id : uid(), label: f.label.trim(), color: f.color };
     setD((s) => ({ ...s, routine: editing ? s.routine.map((x) => (x.id === b.id ? b : x)) : [...s.routine, b] }));
     close(); show("루틴을 저장했어요");
   };
@@ -1711,7 +1899,6 @@ function BlockSheet({ init }) {
   return (
     <Sheet title={editing ? `${P.routine} 블록 수정` : `${P.routine} 블록 추가`} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!f.label.trim()}>저장</Btn></>}>
       <Fld label="이름"><input className="inp" placeholder="예) 루디먼츠, 곡 카피" value={f.label} onChange={(e) => u({ label: e.target.value })} /></Fld>
-      <Fld label="시간 (분)"><input className="inp" inputMode="numeric" value={f.min} onChange={(e) => u({ min: e.target.value.replace(/[^0-9]/g, "") })} /></Fld>
       <Fld label="색상">
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {PALETTE.map((c) => (
@@ -1723,31 +1910,34 @@ function BlockSheet({ init }) {
   );
 }
 
-/* ───────────── 시트: 일지 ───────────── */
-function JournalSheet({ init }) {
+/* ───────────── 시트: 메모 ───────────── */
+function MemoSheet({ init }) {
   const { d, setD, close, show } = useApp();
-  const kinds = d.settings.journalKinds || [];
-  const editing = init && init.id ? d.journal.find((j) => j.id === init.id) : null;
-  const [f, setF] = useState(() => editing ? { ...editing } : { date: todayKey(), kind: kinds.length ? kinds[0].name : "일지", title: "", content: "" });
+  const editing = init && init.id ? (d.memos || []).find((m) => m.id === init.id) : null;
+  const blocks = d.memoBlocks || [];
+  const [f, setF] = useState(() => editing
+    ? { ...editing }
+    : { blockId: (init && init.blockId) || (blocks[0] && blocks[0].id) || "", date: todayKey(), text: "" });
   const u = (p) => setF((s) => ({ ...s, ...p }));
-  const ok = f.content.trim() || f.title.trim();
+  const bName = (blocks.find((b) => b.id === f.blockId) || {}).name || "메모";
   const save = () => {
-    if (!ok) return;
-    const j = { ...f, id: editing ? editing.id : uid() };
-    setD((s) => ({ ...s, journal: editing ? s.journal.map((x) => (x.id === j.id ? j : x)) : [j, ...s.journal] }));
-    close(); show("기록을 저장했어요");
+    if (!f.text.trim()) return;
+    const m = { ...f, id: editing ? editing.id : uid(), text: f.text.trim() };
+    setD((s) => ({ ...s, memos: editing ? (s.memos || []).map((x) => (x.id === m.id ? m : x)) : [m, ...(s.memos || [])] }));
+    close(); show("메모를 저장했어요");
   };
-  const del = () => { setD((s) => ({ ...s, journal: s.journal.filter((x) => x.id !== editing.id) })); close(); show("기록을 삭제했어요"); };
+  const del = () => { setD((s) => ({ ...s, memos: (s.memos || []).filter((x) => x.id !== editing.id) })); close(); show("메모를 삭제했어요"); };
   return (
-    <Sheet title={editing ? "기록 수정" : "새 기록"} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!ok}>저장</Btn></>}>
-      <Fld label="종류">
-        <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-          {kinds.map((k) => <Chip key={k.id || k.name} on={f.kind === k.name} color={k.color} onClick={() => u({ kind: k.name })}>{k.name}</Chip>)}
-        </div>
-      </Fld>
+    <Sheet title={editing ? `${bName} · 메모 수정` : `${bName} · 새 메모`} footer={<>{editing && <ConfirmBtn onConfirm={del} />}<Btn style={{ flex: 2 }} onClick={save} disabled={!f.text.trim()}>저장</Btn></>}>
+      {blocks.length > 1 && (
+        <Fld label="블록">
+          <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+            {blocks.map((b) => <Chip key={b.id} on={f.blockId === b.id} onClick={() => u({ blockId: b.id })}>{b.name}</Chip>)}
+          </div>
+        </Fld>
+      )}
       <Fld label="날짜"><input className="inp" type="date" value={f.date} onChange={(e) => u({ date: e.target.value })} /></Fld>
-      <Fld label="제목"><input className="inp" placeholder="선택 사항" value={f.title} onChange={(e) => u({ title: e.target.value })} /></Fld>
-      <Fld label="내용"><textarea className="inp" rows={7} placeholder="오늘 깨달은 것, 연습의 감각, 공연에서 느낀 점..." value={f.content} onChange={(e) => u({ content: e.target.value })} /></Fld>
+      <Fld label="내용"><textarea className="inp" rows={7} placeholder="느낀 점, 현재 구간, 다음 목표..." value={f.text} onChange={(e) => u({ text: e.target.value })} /></Fld>
     </Sheet>
   );
 }
@@ -1797,25 +1987,6 @@ function SettingsSheet() {
   const setS = (p) => setD((x) => ({ ...x, settings: { ...x.settings, ...p } }));
   const [tab, setTab] = useState("프로필");
   const fileRef = useRef(null);
-  const renameJKind = (id, name) => setD((x) => {
-    const old = x.settings.journalKinds.find((j) => j.id === id);
-    if (!old) return x;
-    return {
-      ...x,
-      settings: { ...x.settings, journalKinds: x.settings.journalKinds.map((j) => (j.id === id ? { ...j, name } : j)) },
-      journal: x.journal.map((e) => (e.kind === old.name ? { ...e, kind: name } : e)),
-    };
-  });
-  const delJKind = (id) => setD((x) => {
-    if ((x.settings.journalKinds || []).length <= 1) return x;
-    const removed = x.settings.journalKinds.find((j) => j.id === id);
-    const rest = x.settings.journalKinds.filter((j) => j.id !== id);
-    return {
-      ...x,
-      settings: { ...x.settings, journalKinds: rest },
-      journal: x.journal.map((e) => (removed && e.kind === removed.name ? { ...e, kind: rest[0].name } : e)),
-    };
-  });
   const doExport = () => { exportBackup(d); show("백업 파일을 내보냈어요"); };
   const onImport = (e) => {
     const file = e.target.files && e.target.files[0];
@@ -1854,6 +2025,18 @@ function SettingsSheet() {
       {tab === "프로필" && (<>
         <H>프로필</H>
         <input className="inp" placeholder="이름 (홈 인사말에 쓰여요)" value={s.userName} onChange={(e) => setS({ userName: e.target.value })} />
+        <H>음악 가치관</H>
+        <Hint>홈 화면의 인용 카드로 보여요. 길게 눌러 수정 · 드래그로 정렬해요.</Hint>
+        <DragList items={s.values} idOf={(v) => v.id}
+          onSort={(arr) => setS({ values: arr })}
+          onLongPress={(v) => rename({ title: "문장 수정", value: v.text, onSave: (n) => setD((x) => ({ ...x, settings: { ...x.settings, values: x.settings.values.map((y) => (y.id === v.id ? { ...y, text: n } : y)) } })) })}
+          render={(v) => (
+            <div style={srow}>
+              <div style={{ flex: 1, minWidth: 0, fontSize: 13.5, lineHeight: 1.5, fontFamily: SERIF, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{v.text}</div>
+              <button className="ib" style={{ padding: 6 }} onClick={() => setS({ values: s.values.filter((x) => x.id !== v.id) })}><Trash2 size={14} color={C.faint} /></button>
+            </div>
+          )} />
+        <AddRow placeholder="새 문장 추가" onAdd={(n) => setS({ values: [...s.values, { id: uid(), text: n }] })} />
         <H>홈 화면 위젯</H>
         {widgetRows.map(([k, label]) => (
           <div key={k} style={rowBox}>
@@ -1946,7 +2129,7 @@ function SettingsSheet() {
       {tab === "연습" && (<>
         <H>연습 탭 이름</H>
         <Hint>연습 탭의 메뉴 이름을 원하는 대로 바꿀 수 있어요. 비우면 기본 이름으로 돌아가요.</Hint>
-        {[["tasks", "과제"], ["routine", "루틴"], ["journal", "일지"]].map(([k, def]) => (
+        {[["routine", "루틴"], ["memo", "메모"]].map(([k, def]) => (
           <div key={k} style={{ display: "flex", alignItems: "center", gap: 10, background: C.card2, borderRadius: 13, padding: "3px 15px", marginBottom: 8 }}>
             <div style={{ fontSize: 11.5, color: C.faint, fontWeight: 800, width: 58, flexShrink: 0 }}>기본 {def}</div>
             <input className="inp" style={{ background: "transparent", border: "none", padding: "11px 0", boxShadow: "none", flex: 1, minWidth: 0 }} placeholder={def}
@@ -1956,45 +2139,31 @@ function SettingsSheet() {
         ))}
 
         <H>루틴 블록</H>
-        <Hint>길게 눌러 이름 수정 · 드래그로 정렬해요. 시간과 색상은 연습 탭의 연필 버튼으로 수정해요.</Hint>
+        <Hint>길게 눌러 이름 수정 · 드래그로 정렬해요. 색상은 연습 탭의 연필 버튼으로 수정해요.</Hint>
         <DragList items={d.routine} idOf={(b) => b.id}
           onSort={(arr) => setD((x) => ({ ...x, routine: arr }))}
           onLongPress={(b) => rename({ title: "블록 이름 수정", value: b.label, onSave: (n) => setD((x) => ({ ...x, routine: x.routine.map((y) => (y.id === b.id ? { ...y, label: n } : y)) })) })}
           render={(b) => (
             <div style={srow}>
               <div style={{ width: 14, height: 14, borderRadius: 5, background: b.color, flexShrink: 0 }} />
-              <div style={sname}>{b.label} <span style={{ color: C.faint, fontSize: 12.5, fontWeight: 700 }}>{b.min}분</span></div>
+              <div style={sname}>{b.label}</div>
               <button className="ib" style={{ padding: 6 }} onClick={() => setD((x) => ({ ...x, routine: x.routine.filter((y) => y.id !== b.id) }))}><Trash2 size={14} color={C.faint} /></button>
             </div>
           )} />
-        <AddRow placeholder="새 루틴 블록 이름" onAdd={(n) => setD((x) => ({ ...x, routine: [...x.routine, { id: uid(), label: n, min: 20, color: PALETTE[x.routine.length % PALETTE.length] }] }))} />
+        <AddRow placeholder="새 루틴 블록 이름" onAdd={(n) => setD((x) => ({ ...x, routine: [...x.routine, { id: uid(), label: n, color: PALETTE[x.routine.length % PALETTE.length] }] }))} />
 
         <H>메모 블록</H>
-        <Hint>홈 화면의 '음악 가치관' 문장으로 보여요. 길게 눌러 수정 · 드래그로 정렬해요.</Hint>
-        <DragList items={s.values} idOf={(v) => v.id}
-          onSort={(arr) => setS({ values: arr })}
-          onLongPress={(v) => rename({ title: "메모 수정", value: v.text, onSave: (n) => setD((x) => ({ ...x, settings: { ...x.settings, values: x.settings.values.map((y) => (y.id === v.id ? { ...y, text: n } : y)) } })) })}
-          render={(v) => (
+        <Hint>연습 탭 '메모'의 블록이에요. 길게 눌러 이름 수정 · 드래그로 정렬해요. 삭제하면 그 블록의 메모도 함께 지워져요.</Hint>
+        <DragList items={d.memoBlocks || []} idOf={(b) => b.id}
+          onSort={(arr) => setD((x) => ({ ...x, memoBlocks: arr }))}
+          onLongPress={(b) => rename({ title: "블록 이름 수정", value: b.name, onSave: (n) => setD((x) => ({ ...x, memoBlocks: x.memoBlocks.map((y) => (y.id === b.id ? { ...y, name: n } : y)) })) })}
+          render={(b) => (
             <div style={srow}>
-              <div style={{ flex: 1, minWidth: 0, fontSize: 13.5, lineHeight: 1.5, fontFamily: SERIF, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{v.text}</div>
-              <button className="ib" style={{ padding: 6 }} onClick={() => setS({ values: s.values.filter((x) => x.id !== v.id) })}><Trash2 size={14} color={C.faint} /></button>
+              <div style={sname}>{b.name} <span style={{ color: C.faint, fontSize: 12.5, fontWeight: 700 }}>{(d.memos || []).filter((m) => m.blockId === b.id).length}개</span></div>
+              <button className="ib" style={{ padding: 6 }} onClick={() => setD((x) => ({ ...x, memoBlocks: (x.memoBlocks || []).filter((y) => y.id !== b.id), memos: (x.memos || []).filter((m) => m.blockId !== b.id) }))}><Trash2 size={14} color={C.faint} /></button>
             </div>
           )} />
-        <AddRow placeholder="새 문장 추가" onAdd={(n) => setS({ values: [...s.values, { id: uid(), text: n }] })} />
-
-        <H>일지 카테고리</H>
-        <Hint>색 점을 누르면 색이 바뀌어요. 길게 눌러 이름을 바꾸면 기존 기록에도 그대로 적용돼요.</Hint>
-        <DragList items={s.journalKinds || []} idOf={(k) => k.id || k.name}
-          onSort={(arr) => setS({ journalKinds: arr })}
-          onLongPress={(k) => rename({ title: "카테고리 이름 수정", value: k.name, onSave: (n) => renameJKind(k.id, n) })}
-          render={(k) => (
-            <div style={srow}>
-              <button onClick={() => setS({ journalKinds: s.journalKinds.map((x) => (x.id === k.id ? { ...x, color: PALETTE[(PALETTE.indexOf(x.color) + 1) % PALETTE.length] } : x)) })} style={{ width: 22, height: 22, borderRadius: "50%", background: k.color, border: "2px solid rgba(255,255,255,0.15)", flexShrink: 0 }} />
-              <div style={sname}>{k.name}</div>
-              <button className="ib" style={{ padding: 6 }} onClick={() => delJKind(k.id)}><Trash2 size={14} color={C.faint} /></button>
-            </div>
-          )} />
-        <AddRow placeholder="새 카테고리 이름" onAdd={(n) => { if ((s.journalKinds || []).some((x) => x.name === n)) return false; setS({ journalKinds: [...(s.journalKinds || []), { id: uid(), name: n, color: PALETTE[(s.journalKinds || []).length % PALETTE.length] }] }); }} />
+        <AddRow placeholder="새 메모 블록 (예: 느낀점)" onAdd={(n) => setD((x) => ({ ...x, memoBlocks: [...(x.memoBlocks || []), { id: uid(), name: n }] }))} />
       </>)}
 
       {tab === "가계부" && (<>
@@ -2044,9 +2213,8 @@ function SheetRouter({ sheet }) {
     case "venue": return <VenueSheet init={init} />;
     case "student": return <StudentSheet init={init} />;
     case "record": return <RecordSheet init={init} />;
-    case "task": return <TaskSheet init={init} />;
     case "block": return <BlockSheet init={init} />;
-    case "journal": return <JournalSheet init={init} />;
+    case "memo": return <MemoSheet init={init} />;
     case "txn": return <TxnSheet init={init} />;
     case "settings": return <SettingsSheet />;
     default: return null;
