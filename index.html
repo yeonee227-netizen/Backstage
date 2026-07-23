@@ -1519,7 +1519,7 @@ function EventSheet({ init }) {
   const u = (p) => setF((s) => ({ ...s, ...p }));
   const fee = parseNum(f.fee);
   const repeating = !editing && f.repeat && f.repeat !== "없음";
-  const REPN = { "매주": 26, "2주마다": 13, "매월": 6 };
+  const REPN = { "매주": 52, "2주마다": 26, "매월": 12 };
   const repN = repeating ? (REPN[f.repeat] || 8) : 1;
   const curType = d.settings.eventTypes.find((t) => t.id === f.typeId);
   const isLesson = isLessonType(curType);
@@ -1662,7 +1662,7 @@ function EventSheet({ init }) {
       )}
       {repeating && f.date && (
         <div style={{ fontSize: 12, color: C.faint, margin: "-6px 2px 15px", lineHeight: 1.6 }}>
-          {fmtKo(f.date)}부터 약 6개월치가 자동으로 만들어져요 (마지막 {fmtKo(repShift(f.date, f.repeat, repN - 1))}). 하나를 열어 삭제 · 수정할 때 이후 반복까지 한 번에 처리할 수 있어요.
+          {fmtKo(f.date)}부터 약 1년치가 자동으로 만들어져요 (마지막 {fmtKo(repShift(f.date, f.repeat, repN - 1))}). 하나를 열어 삭제 · 수정할 때 이후 반복까지 한 번에 처리할 수 있어요.
         </div>
       )}
       {needCycle && (
@@ -1778,7 +1778,7 @@ function ExtractSheet() {
       out += `\n\n${fmtKo(e.date)}${t0 ? " " + fmtK12(t0) : ""}`;
       if (e.venue) out += `\n@${e.venue}`;
       const team = teamOf(e);
-      const mem = (e.members || []).map((m) => `${m.inst} ${m.name}`.trim()).join(", ");
+      const mem = (e.members || []).filter((m) => m.name).map((m) => `${m.inst} ${m.name}`.trim()).join(", ");
       if (team && mem) out += `\n${team}: ${mem}`;
       else if (team) out += `\n${team}`;
       else if (mem) out += `\n${mem}`;
