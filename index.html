@@ -1718,7 +1718,7 @@ function EventSheet({ init }) {
               </div>
             )}
             <Btn kind="g" style={{ width: "100%", padding: "11px 0", fontSize: 13.5 }} onClick={() => setF((s) => ({ ...s, members: [...(s.members || []), { id: uid(), inst: instList[0] || "", name: "" }] }))}><Plus size={15} />멤버 추가</Btn>
-            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 7, lineHeight: 1.5 }}>왼쪽 손잡이를 길게 눌러 드래그하면 순서가 바뀌어요. 같은 악기도 여러 명 추가할 수 있어요.</div>
+            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 7, lineHeight: 1.5 }}>왼쪽 손잡이를 드래그하면 순서가 바뀌어요. 같은 악기도 여러 명 추가할 수 있어요.</div>
           </Fld>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.card2, borderRadius: 13, padding: "13px 15px", marginBottom: 15, gap: 10 }}>
             <div>
@@ -2058,7 +2058,7 @@ function SettingsSheet() {
         <H>프로필</H>
         <input className="inp" placeholder="이름 (홈 인사말에 쓰여요)" value={s.userName} onChange={(e) => setS({ userName: e.target.value })} />
         <H>음악 가치관</H>
-        <Hint>홈 화면의 인용 카드로 보여요. 길게 눌러 수정 · 드래그로 정렬해요.</Hint>
+        <Hint>홈 화면의 인용 카드로 보여요. 연필 버튼으로 수정, 드래그로 정렬해요.</Hint>
         <DragList items={s.values} idOf={(v) => v.id}
           onSort={(arr) => setS({ values: arr })}
           render={(v) => (
@@ -2088,7 +2088,7 @@ function SettingsSheet() {
 
       {tab === "연주" && (<>
         <H>연주 유형</H>
-        <Hint>색 점을 누르면 색이 바뀌고, '연주'를 켜면 연주 상세 입력 · 연주일정 추출 · 홈의 연주 횟수에 포함돼요. 길게 누르면 이름 수정, 길게 누른 채 드래그하면 순서가 바뀌어요.</Hint>
+        <Hint>색 점을 누르면 색이 바뀌고, '연주'를 켜면 연주 상세 입력 · 연주일정 추출 · 홈의 연주 횟수에 포함돼요. 연필 버튼으로 이름 수정, 드래그로 순서를 바꾸세요.</Hint>
         <DragList items={s.eventTypes} idOf={(t) => t.id}
           onSort={(arr) => setS({ eventTypes: arr })}
           render={(t) => (
@@ -2103,7 +2103,7 @@ function SettingsSheet() {
         <AddRow placeholder="새 유형 이름" onAdd={(n) => setS({ eventTypes: [...s.eventTypes, { id: uid(), name: n, color: PALETTE[s.eventTypes.length % PALETTE.length], perf: false }] })} />
 
         <H>악기 목록</H>
-        <Hint>연주 일정의 멤버 악기 드롭다운에 쓰여요. 길게 눌러 이름 수정 · 드래그로 정렬해요.</Hint>
+        <Hint>연주 일정의 멤버 악기 드롭다운에 쓰여요. 연필 버튼으로 이름 수정, 드래그로 정렬해요.</Hint>
         <DragList items={s.instruments || []} idOf={(x) => x}
           onSort={(arr) => setS({ instruments: arr })}
           render={(inst) => (
@@ -2116,7 +2116,7 @@ function SettingsSheet() {
         <AddRow placeholder="새 악기 이름" onAdd={(n) => { if ((s.instruments || []).includes(n)) return false; setS({ instruments: [...(s.instruments || []), n] }); }} />
 
         <H>연주인원</H>
-        <Hint>연주 일정의 인원 드롭다운과 팀 기본명에 쓰여요. 길게 눌러 이름을 바꿀 수 있어요.</Hint>
+        <Hint>연주 일정의 인원 드롭다운과 팀 기본명에 쓰여요. 연필 버튼으로 이름을 바꿀 수 있어요.</Hint>
         <DragList items={s.ensembles || []} idOf={(en) => en.id}
           onSort={(arr) => setS({ ensembles: arr })}
           render={(en) => (
@@ -2129,7 +2129,7 @@ function SettingsSheet() {
 
       {tab === "레슨" && (<>
         <H>학생 리스트</H>
-        <Hint>드래그로 순서를 바꾸고, 길게 눌러 이름을 수정해요. 상세 정보 · 삭제는 레슨 탭에서 관리해요.</Hint>
+        <Hint>드래그로 순서를 바꾸고, 연필 버튼으로 이름을 수정해요. 상세 정보 · 삭제는 레슨 탭에서 관리해요.</Hint>
         {d.students.length ? (
           <DragList items={d.students} idOf={(st) => st.id}
             onSort={(arr) => setD((x) => ({ ...x, students: arr }))}
@@ -2144,7 +2144,7 @@ function SettingsSheet() {
         <AddRow placeholder="새 레슨생 이름" onAdd={(n) => setD((x) => ({ ...x, students: [...x.students, { id: uid(), name: n, info: "", contact: "", memo: "", records: [] }] }))} />
 
         <H>진도표 블록</H>
-        <Hint>레슨 기록의 '진도'를 빠르게 선택할 수 있는 커리큘럼 블록이에요. 길게 눌러 이름 수정 · 드래그로 정렬해요.</Hint>
+        <Hint>레슨 기록의 '진도'를 빠르게 선택할 수 있는 커리큘럼 블록이에요. 연필 버튼으로 이름 수정, 드래그로 정렬해요.</Hint>
         <DragList items={s.curriculum || []} idOf={(c) => c.id}
           onSort={(arr) => setS({ curriculum: arr })}
           render={(c, i) => (
@@ -2171,7 +2171,7 @@ function SettingsSheet() {
         ))}
 
         <H>루틴 블록</H>
-        <Hint>길게 눌러 이름 수정 · 드래그로 정렬해요. 색상은 연습 탭의 연필 버튼으로 수정해요.</Hint>
+        <Hint>연필 버튼으로 이름 수정, 드래그로 정렬해요. 색상은 연습 탭의 연필 버튼으로 수정해요.</Hint>
         <DragList items={d.routine} idOf={(b) => b.id}
           onSort={(arr) => setD((x) => ({ ...x, routine: arr }))}
           render={(b) => (
@@ -2185,7 +2185,7 @@ function SettingsSheet() {
         <AddRow placeholder="새 루틴 블록 이름" onAdd={(n) => setD((x) => ({ ...x, routine: [...x.routine, { id: uid(), label: n, color: PALETTE[x.routine.length % PALETTE.length] }] }))} />
 
         <H>메모 블록</H>
-        <Hint>연습 탭 '메모'의 블록이에요. 길게 눌러 이름 수정 · 드래그로 정렬해요. 삭제하면 그 블록의 메모도 함께 지워져요.</Hint>
+        <Hint>연습 탭 '메모'의 블록이에요. 연필 버튼으로 이름 수정, 드래그로 정렬해요. 삭제하면 그 블록의 메모도 함께 지워져요.</Hint>
         <DragList items={d.memoBlocks || []} idOf={(b) => b.id}
           onSort={(arr) => setD((x) => ({ ...x, memoBlocks: arr }))}
           render={(b) => (
@@ -2200,7 +2200,7 @@ function SettingsSheet() {
 
       {tab === "가계부" && (<>
         <H>수입 카테고리</H>
-        <Hint>길게 눌러 이름 수정 · 드래그로 정렬해요. 이름을 바꾸면 기존 내역에도 적용돼요.</Hint>
+        <Hint>연필 버튼으로 이름 수정, 드래그로 정렬해요. 이름을 바꾸면 기존 내역에도 적용돼요.</Hint>
         <DragList items={s.incomeCats} idOf={(c) => c}
           onSort={(arr) => setS({ incomeCats: arr })}
           render={(c) => (
