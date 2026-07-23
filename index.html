@@ -1846,14 +1846,14 @@ function StudentSheet({ init }) {
   const { d, setD, close, show } = useApp();
   const editing = init && init.id ? d.students.find((s) => s.id === init.id) : null;
   const [f, setF] = useState(() => editing
-    ? { name: editing.name, info: editing.info || "", contact: editing.contact || "", memo: editing.memo || "" }
-    : { name: "", info: "", contact: "", memo: "" });
+    ? { name: editing.name, info: editing.info || "", contact: editing.contact || "", memo: editing.memo || "", progressId: editing.progressId || "" }
+    : { name: "", info: "", contact: "", memo: "", progressId: "" });
   const u = (p) => setF((s) => ({ ...s, ...p }));
   const save = () => {
     if (!f.name.trim()) return;
     setD((s) => editing
-      ? { ...s, students: s.students.map((x) => (x.id === editing.id ? { ...x, ...f, name: f.name.trim() } : x)) }
-      : { ...s, students: [...s.students, { id: uid(), ...f, name: f.name.trim(), records: [] }] });
+      ? { ...s, students: s.students.map((x) => (x.id === editing.id ? { ...x, name: f.name.trim(), info: f.info, contact: f.contact, memo: f.memo, progressId: f.progressId, att: x.att, absents: x.absents, records: x.records } : x)) }
+      : { ...s, students: [...s.students, { id: uid(), name: f.name.trim(), info: f.info, contact: f.contact, memo: f.memo, progressId: f.progressId, att: {}, absents: [], records: [] }] });
     close(); show(editing ? "레슨생 정보를 수정했어요" : "레슨생을 등록했어요");
   };
   const del = () => { setD((s) => ({ ...s, students: s.students.filter((x) => x.id !== editing.id) })); close(); show("레슨생을 삭제했어요"); };
@@ -1862,6 +1862,14 @@ function StudentSheet({ init }) {
       <Fld label="이름"><input className="inp" value={f.name} onChange={(e) => u({ name: e.target.value })} /></Fld>
       <Fld label="레슨 요일 · 시간"><input className="inp" placeholder="예) 수 17:00" value={f.info} onChange={(e) => u({ info: e.target.value })} /></Fld>
       <Fld label="연락처"><input className="inp" placeholder="예) 010-0000-0000" value={f.contact} onChange={(e) => u({ contact: e.target.value })} /></Fld>
+      {(d.settings.curriculum || []).length > 0 && (
+        <Fld label="진도표">
+          <select className="inp" value={f.progressId || ""} onChange={(e) => u({ progressId: e.target.value })}>
+            <option value="">선택 안 함</option>
+            {d.settings.curriculum.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </Fld>
+      )}
       <Fld label="메모"><textarea className="inp" rows={3} placeholder="레벨, 목표, 특이사항..." value={f.memo} onChange={(e) => u({ memo: e.target.value })} /></Fld>
     </Sheet>
   );
@@ -2153,7 +2161,7 @@ function SettingsSheet() {
             <div style={{ fontSize: 11.5, color: C.faint, fontWeight: 800, width: 58, flexShrink: 0 }}>기본 {def}</div>
             <input className="inp" style={{ background: "transparent", border: "none", padding: "11px 0", boxShadow: "none", flex: 1, minWidth: 0 }} placeholder={def}
               value={s.pracNames && s.pracNames[k] !== undefined ? s.pracNames[k] : def}
-              onChange={(e) => setS({ pracNames: { ...pracNamesOf(s), ...(s.pracNames || {}), [k]: e.target.value } })} />
+              onChange={(e) => { const v = e.target.value.trim(); const newPN = { ...pracNamesOf(s), ...(s.pracNames || {}), [k]: v }; if (!v) delete newPN[k]; setS({ pracNames: newPN }); }} />
           </div>
         ))}
 
