@@ -279,6 +279,11 @@ function normalizeBackup(obj) {
   } else if (!Array.isArray(out.memoBlocks)) {
     out.memoBlocks = [];
   }
+  /* 긱 멤버 필드 정규화: id와 inst 필드 보장 */
+  out.events = (out.events || []).map((e) => {
+    if (!Array.isArray(e.members)) return e;
+    return { ...e, members: e.members.map((m) => ({ id: m.id || uid(), inst: m.inst || "", name: m.name || "" })) };
+  });
   return out;
 }
 
@@ -1542,7 +1547,7 @@ function EventSheet({ init }) {
       groupId: gid,
       callTime: snap5(f.callTime || ""), showTime: snap5(f.showTime || ""),
       ensemble: f.ensemble || "", leader: (f.leader || "").trim(),
-      members: (f.members || []).map((m) => ({ ...m, name: (m.name || "").trim() })).filter((m) => m.name),
+      members: (f.members || []).map((m) => ({ id: m.id, inst: m.inst || "", name: (m.name || "").trim() })),
       teamNameOn: !!f.teamNameOn, teamName: (f.teamName || "").trim(),
       studentId: f.studentId || "",
       payCycle: editing ? editing.payCycle : (pc ? { n: pc.n, at: pc.at } : undefined),
