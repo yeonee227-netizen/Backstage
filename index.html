@@ -65,6 +65,10 @@ const exportBackup = (data) => {
 const SYNC_KEY = "backstage_sync_v1";
 const SYNC_BACKUP_KEY = "backstage_sync_prev_backup";
 const GIST_FILE = "BACKSTAGE.json";
+/* 매일 자동 백업: 같은 Gist에 날짜별 스냅샷을 남기고 최근 7일치만 보관해요 */
+const BK_PREFIX = "BACKSTAGE-backup-";
+const BK_RE = /^BACKSTAGE-backup-\d{4}-\d{2}-\d{2}\.json$/;
+const BK_KEEP = 7;
 const fmtClock = (t) => { const dt = new Date(t); return pad(dt.getHours()) + ":" + pad(dt.getMinutes()); };
 const syncCfgStore = {
   load() { try { const v = localStorage.getItem(SYNC_KEY); return v ? JSON.parse(v) : null; } catch (e) { return null; } },
@@ -81,14 +85,27 @@ const GH = {
     const g = list.find((x) => x.files && x.files[GIST_FILE]);
     return g ? g.id : null;
   },
-  async create(token, content) {
-    const r = await fetch("https://api.github.com/gists", { method: "POST", headers: this.hdr(token), body: JSON.stringify({ description: "BACKSTAGE 데이터 동기화", public: false, files: { [GIST_FILE]: { content } } }) });
+  /* files: { "이름": { content } } 형태 — 값이 null이면 그 파일을 삭제해요 */
+  async create(token, files) {
+    const r = await fetch("https://api.github.com/gists", { method: "POST", headers: this.hdr(token), body: JSON.stringify({ description: "BACKSTAGE 데이터 동기화", public: false, files }) });
     if (!r.ok) throw new Error("HTTP " + r.status);
     return (await r.json()).id;
   },
-  async update(token, id, content) {
-    const r = await fetch("https://api.github.com/gists/" + id, { method: "PATCH", headers: this.hdr(token), body: JSON.stringify({ files: { [GIST_FILE]: { content } } }) });
+  async update(token, id, files) {
+    const r = await fetch("https://api.github.com/gists/" + id, { method: "PATCH", headers: this.hdr(token), body: JSON.stringify({ files }) });
     if (!r.ok) throw new Error("HTTP " + r.status);
+  },
+  async meta(token, id) {
+    const r = await fetch("https://api.github.com/gists/" + id, { headers: this.hdr(token), cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  },
+  async readFile(token, id, name) {
+    const j = await this.meta(token, id);
+    const f = j.files && j.files[name];
+    if (!f) throw new Error("file-missing");
+    if (f.truncated && f.raw_url) { const rr = await fetch(f.raw_url, { cache: "no-store" }); if (!rr.ok) throw new Error("HTTP " + rr.status); return await rr.text(); }
+    return f.content;
   },
   /* ETag 조건부 요청 — 원격에 변화가 없으면 다운로드를 건너뛰어요 */
   async read(token, id, etag) {
@@ -98,11 +115,12 @@ const GH = {
     if (r.status === 304) return { unchanged: true, etag };
     if (!r.ok) throw new Error("HTTP " + r.status);
     const j = await r.json();
+    const names = Object.keys(j.files || {});
     const f = j.files && j.files[GIST_FILE];
-    if (!f) return { text: null, etag: r.headers.get("ETag") };
+    if (!f) return { text: null, etag: r.headers.get("ETag"), names };
     let text = f.content;
     if (f.truncated && f.raw_url) { const rr = await fetch(f.raw_url, { cache: "no-store" }); text = await rr.text(); }
-    return { text, etag: r.headers.get("ETag") };
+    return { text, etag: r.headers.get("ETag"), names };
   },
 };
 
@@ -2075,6 +2093,21 @@ function SettingsSheet() {
     setGhBusy(false);
     if (ok) setGhTok("");
   };
+  const [bkList, setBkList] = useState(null);
+  const [bkBusy, setBkBusy] = useState(false);
+  const [bkAsk, setBkAsk] = useState(null);
+  const loadBackups = async () => {
+    if (bkBusy) return;
+    setBkBusy(true); setBkAsk(null);
+    try { setBkList(await sync.listBackups()); } catch (e) { show("백업 목록을 불러올 수 없어요"); }
+    setBkBusy(false);
+  };
+  const restoreBackup = async (name) => {
+    if (bkBusy) return;
+    setBkBusy(true);
+    try { await sync.restoreBackup(name); } catch (e) { show("복원에 실패했어요 — 네트워크를 확인해주세요"); }
+    setBkBusy(false); setBkAsk(null);
+  };
   const hasSyncBackup = (() => { try { return !!localStorage.getItem(SYNC_BACKUP_KEY); } catch (e) { return false; } })();
   const doExport = () => { exportBackup(d); show("백업 파일을 내보냈어요"); };
   const onImport = (e) => {
@@ -2306,6 +2339,26 @@ function SettingsSheet() {
             </div>
             <Btn style={{ width: "100%", marginBottom: 9 }} onClick={ghConnect} disabled={!ghTok.trim() || ghBusy}>{ghBusy ? "연결 중…" : "연결하기"}</Btn>
           </>)}
+          {!sync.ui.needToken && (<>
+            <div style={rowBox}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>매일 자동 백업</div>
+                <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>매일 첫 동기화 때 그날의 백업을 만들어 최근 {BK_KEEP}일치를 보관해요</div>
+              </div>
+              <Btn kind="g" style={{ padding: "10px 14px", fontSize: 13, flexShrink: 0 }} onClick={loadBackups} disabled={bkBusy}>{bkBusy ? "…" : bkList ? "새로고침" : "목록 보기"}</Btn>
+            </div>
+            {bkList && (bkList.length ? bkList.map((n) => {
+              const date = n.slice(BK_PREFIX.length, n.length - 5);
+              return (
+                <div key={n} style={srow}>
+                  <div style={sname}>{date} 백업</div>
+                  {bkAsk === n
+                    ? <Btn kind="d" style={{ padding: "8px 12px", fontSize: 12.5, flexShrink: 0 }} onClick={() => restoreBackup(n)} disabled={bkBusy}>정말 복원할까요?</Btn>
+                    : <Btn kind="g" style={{ padding: "8px 12px", fontSize: 12.5, flexShrink: 0 }} onClick={() => setBkAsk(n)}>복원</Btn>}
+                </div>
+              );
+            }) : <Hint>아직 자동 백업이 없어요. 다음 동기화 때 오늘 백업이 만들어져요.</Hint>)}
+          </>)}
           {hasSyncBackup && (
             <Btn kind="g" style={{ width: "100%", marginBottom: 9 }} onClick={() => { try { const b = JSON.parse(localStorage.getItem(SYNC_BACKUP_KEY)); if (b && b.data) { setD(normalizeBackup(b.data)); show("동기화 전 데이터로 복구했어요"); } } catch (e) { show("복구 데이터를 읽을 수 없어요"); } }}>동기화로 덮어쓰기 전 데이터 복구</Btn>
           )}
@@ -2442,7 +2495,7 @@ function App() {
   const [syncState, setSyncState] = useState("off");
   const [syncAt, setSyncAt] = useState(null);
   const [syncUI, setSyncUI] = useState({ connected: false, needToken: false, remember: true });
-  const syncRef = useRef({ cfg: null, token: null, dirty: false, busy: false, applying: false, etag: null, loaded: false });
+  const syncRef = useRef({ cfg: null, token: null, dirty: false, busy: false, applying: false, etag: null, loaded: false, remoteFiles: null });
   const doSyncRef = useRef(() => {});
   const dRef = useRef(null);
   dRef.current = d;
@@ -2546,6 +2599,7 @@ function App() {
           if (!S.dirty && !opts.force) skip = true;
         } else {
           S.etag = r.etag;
+          if (r.names) S.remoteFiles = r.names;
           if (r.text) { try { remoteObj = JSON.parse(r.text); remoteStamp = Number(remoteObj.syncStamp) || 0; } catch (e) {} }
         }
       }
@@ -2563,8 +2617,18 @@ function App() {
         const stamp = localStamp || Date.now();
         S.cfg.stamp = stamp;
         const content = JSON.stringify({ ...dRef.current, syncStamp: stamp });
-        if (S.cfg.gistId) await GH.update(S.token, S.cfg.gistId, content);
-        else S.cfg.gistId = await GH.create(S.token, content);
+        const files = { [GIST_FILE]: { content } };
+        /* 매일 첫 업로드 때 그날의 자동 백업을 만들고, 오래된 백업은 정리해요 */
+        const today = todayKey();
+        if (S.cfg.lastBackupDate !== today) {
+          files[BK_PREFIX + today + ".json"] = { content };
+          const olds = (S.remoteFiles || []).filter((n) => BK_RE.test(n) && n !== BK_PREFIX + today + ".json").sort();
+          for (let i = 0; i < olds.length - (BK_KEEP - 1); i++) files[olds[i]] = null;
+        }
+        if (S.cfg.gistId) await GH.update(S.token, S.cfg.gistId, files);
+        else S.cfg.gistId = await GH.create(S.token, files);
+        S.cfg.lastBackupDate = today;
+        if (S.remoteFiles) S.remoteFiles = S.remoteFiles.filter((n) => files[n] !== null).concat(Object.keys(files).filter((n) => files[n] && !S.remoteFiles.includes(n)));
         S.dirty = false; S.etag = null; syncCfgStore.save(S.cfg);
         if (opts.manual) show("GitHub에 최신 데이터를 올렸어요");
       } else if (opts.manual) show("이미 최신 상태예요");
@@ -2599,7 +2663,10 @@ function App() {
       } else {
         const stamp = Date.now();
         cfg.stamp = stamp;
-        cfg.gistId = await GH.create(token, JSON.stringify({ ...(dRef.current || {}), syncStamp: stamp }));
+        const content = JSON.stringify({ ...(dRef.current || {}), syncStamp: stamp });
+        const today = todayKey();
+        cfg.gistId = await GH.create(token, { [GIST_FILE]: { content }, [BK_PREFIX + today + ".json"]: { content } });
+        cfg.lastBackupDate = today;
         S.dirty = false;
         syncCfgStore.save(cfg);
         setSyncState("idle"); setSyncAt(Date.now());
@@ -2614,9 +2681,31 @@ function App() {
     }
   };
 
+  /* 자동 백업 목록 (최신순) */
+  const syncListBackups = async () => {
+    const S = syncRef.current;
+    if (!S.cfg || !S.token || !S.cfg.gistId) return [];
+    const j = await GH.meta(S.token, S.cfg.gistId);
+    S.remoteFiles = Object.keys(j.files || {});
+    return S.remoteFiles.filter((n) => BK_RE.test(n)).sort().reverse();
+  };
+
+  /* 날짜 백업으로 복원 — 복원 전 현재 데이터를 안전 백업하고, 복원 결과는 모든 기기로 전파돼요 */
+  const syncRestoreBackup = async (name) => {
+    const S = syncRef.current;
+    if (!S.cfg || !S.token || !S.cfg.gistId) return false;
+    const text = await GH.readFile(S.token, S.cfg.gistId, name);
+    const obj = JSON.parse(text);
+    if (!obj || typeof obj !== "object" || !obj.settings) throw new Error("형식 오류");
+    try { localStorage.setItem(SYNC_BACKUP_KEY, JSON.stringify({ savedAt: Date.now(), data: dRef.current })); } catch (e) {}
+    setD(normalizeBackup(obj));
+    show(name.slice(BK_PREFIX.length, name.length - 5) + " 백업으로 복원했어요 · 잠시 후 모든 기기에 반영돼요");
+    return true;
+  };
+
   const syncDisconnect = () => {
     const S = syncRef.current;
-    S.cfg = null; S.token = null; S.dirty = false; S.etag = null;
+    S.cfg = null; S.token = null; S.dirty = false; S.etag = null; S.remoteFiles = null;
     syncCfgStore.clear();
     setSyncUI({ connected: false, needToken: false, remember: true });
     setSyncState("off");
@@ -2625,7 +2714,7 @@ function App() {
 
   if (!d) return <Loading />;
 
-  const sync = { state: syncState, at: syncAt, ui: syncUI, connect: syncConnect, disconnect: syncDisconnect, now: () => doSync({ manual: true }) };
+  const sync = { state: syncState, at: syncAt, ui: syncUI, connect: syncConnect, disconnect: syncDisconnect, now: () => doSync({ manual: true }), listBackups: syncListBackups, restoreBackup: syncRestoreBackup };
   const ctx = { d, setD, open: setSheet, close: () => setSheet(null), show, setTab, togglePaid, saveState, rename: setRen, sync };
 
   return (
