@@ -182,8 +182,33 @@ const VSC = { 연락예정: C.gray, 연락중: C.blue, 확정: C.teal, 보류: C
 const ATT = { 출석: C.teal, 보강: C.gold, 결석: C.red };
 /* 입금 주기 패턴: i(1부터) 회차에 입금이 잡히는지 — 매 1회차(주기의 시작)에 입금 */
 const payOnSeq = (i, pc) => (!pc ? true : pc.at === "end" ? i % pc.n === 0 : i % pc.n === 1);
-/* 레슨 회차: 그룹 안에서 날짜순 순번을 정산 주기(매주 4회 · 격주 2회)로 순환시켜 표시 (1→2→3→4→1...) */
-const lessonNoOf = (events, ev) => {
+/* 학생별 정산 설정: { n: 4(매주)|2(격주), at: "start"(선불·1회차)|"end"(후불·마지막 회차), amount } */
+const billingOf = (st) => (st && st.billing && st.billing.n ? st.billing : null);
+const billingText = (b) => (b ? `${b.n === 4 ? "매주" : "격주"} ${b.n}회 정산 · ${b.at === "end" ? `후불(${b.n}회차)` : "선불(1회차)"}${b.amount ? " · " + wonShort(b.amount) : ""}` : "");
+const studentLessons = (events, sid) => events.filter((e) => e.studentId === sid).slice().sort(byDT);
+/* 학생 정산 재계산: 그 학생의 모든 레슨을 날짜순으로 세어 정산 회차에만 금액을 매김. 이미 입금된 레슨은 건드리지 않음 */
+const recalcStudentFees = (s, sid) => {
+  const b = billingOf(s.students.find((x) => x.id === sid));
+  if (!b) return s;
+  const pc = { n: b.n, at: b.at };
+  const feeById = {};
+  studentLessons(s.events, sid).forEach((e, i) => { feeById[e.id] = payOnSeq(i + 1, pc) ? (b.amount || 0) : 0; });
+  const events = s.events.map((e) => {
+    const nf = feeById[e.id];
+    if (nf === undefined || e.paid) return e;
+    return nf === e.fee && !e.paidDate ? e : { ...e, fee: nf, paid: false, paidDate: "" };
+  });
+  const transactions = s.transactions.filter((t) => {
+    if (!t.eventId || feeById[t.eventId] === undefined) return true;
+    const e = events.find((x) => x.id === t.eventId);
+    return !!(e && e.paid);
+  });
+  return { ...s, events, transactions };
+};
+/* 레슨 회차: 정산 설정이 있는 학생은 그 학생의 전체 레슨 기준, 아니면 반복 그룹 기준으로 순환 표시 (1→2→3→4→1...) */
+const lessonNoOf = (events, ev, students) => {
+  const b = ev.studentId && students ? billingOf(students.find((x) => x.id === ev.studentId)) : null;
+  if (b) { const i = studentLessons(events, ev.studentId).findIndex((e) => e.id === ev.id); return i < 0 ? null : (i % b.n) + 1; }
   if (!ev.groupId) return null;
   const seq = events.filter((e) => e.groupId === ev.groupId).slice().sort((a, b) => a.date.localeCompare(b.date));
   const i = seq.findIndex((e) => e.id === ev.id);
@@ -192,7 +217,9 @@ const lessonNoOf = (events, ev) => {
   return n ? (i % n) + 1 : i + 1;
 };
 /* 그룹의 남은 레슨을 날짜순으로 다시 세어 입금 주기 패턴(매 1회차 입금)을 재적용 */
-const recalcGroupFees = (s, groupId) => {
+const recalcGroupFees = (s, groupId, studentId) => {
+  const sid = studentId || (groupId ? ((s.events.find((e) => e.groupId === groupId && e.studentId) || {}).studentId) : null);
+  if (sid && billingOf(s.students.find((x) => x.id === sid))) return recalcStudentFees(s, sid);
   if (!groupId) return s;
   const seq = s.events.filter((e) => e.groupId === groupId).slice().sort((a, b) => a.date.localeCompare(b.date));
   const ref = seq.find((e) => e.payCycle && e.payAmount > 0);
@@ -211,6 +238,22 @@ const recalcGroupFees = (s, groupId) => {
   });
   return { ...s, events, transactions };
 };
+/* 출석부 4가지 상태: 출석 · 결석 · 당일결석 · 스킵 */
+const AMK = {
+  O: { label: "출석", sym: "O", c: C.teal, bg: "rgba(76,201,166,0.13)", bd: "rgba(76,201,166,0.5)" },
+  X: { label: "결석", sym: "X", c: C.red, bg: "rgba(229,107,87,0.13)", bd: "rgba(229,107,87,0.5)" },
+  L: { label: "당일결석", sym: "△", c: C.orange, bg: "rgba(236,154,82,0.14)", bd: "rgba(236,154,82,0.55)" },
+  S: { label: "스킵", sym: "→", c: C.violet, bg: "rgba(158,134,232,0.14)", bd: "rgba(158,134,232,0.55)" },
+};
+/* 반복 그룹의 간격(일) 추정: 매주 7 · 2주마다 14 · 매월 30 */
+const groupGapOf = (events, ev) => {
+  if (!ev || !ev.groupId) return 7;
+  const ds = events.filter((e) => e.groupId === ev.groupId).map((e) => parseKey(e.date).getTime()).sort((a, b) => a - b);
+  let g = 0;
+  for (let i = 1; i < ds.length; i++) { const x = Math.round((ds[i] - ds[i - 1]) / 86400000); if (x > 0 && (!g || x < g)) g = x; }
+  return g >= 28 ? 30 : g === 14 ? 14 : 7;
+};
+const shiftByGap = (dk, gap, dir) => (gap === 30 ? repShift(dk, "매월", dir) : keyOf(new Date(parseKey(dk).getFullYear(), parseKey(dk).getMonth(), parseKey(dk).getDate() + gap * dir)));
 const ENBY = { 1: "SOLO", 2: "DUO", 3: "TRIO", 4: "QUARTET", 5: "QUINTET", 6: "SEXTET", 7: "SEPTET", 8: "OCTET", 9: "NONET" };
 const isLessonType = (t) => !!t && (t.id === "t_lesson" || (t.name || "").includes("레슨"));
 const KEY = "backstage-v1";
@@ -244,6 +287,12 @@ const snap5 = (t) => {
 };
 const shiftM = (c, d) => { const dt = new Date(c.y, c.m + d, 1); return { y: dt.getFullYear(), m: dt.getMonth() }; };
 const nowYM = () => { const n = new Date(); return { y: n.getFullYear(), m: n.getMonth() }; };
+/* 여러 날 일정: endDate가 date보다 뒤일 때만 유효 */
+const endOf = (e) => (e.endDate && e.endDate > e.date ? e.endDate : e.date);
+const covers = (e, k) => e.date <= k && k <= endOf(e);
+const addDays = (k, n) => { const t = parseKey(k); return keyOf(new Date(t.getFullYear(), t.getMonth(), t.getDate() + n)); };
+const spanDays = (a, b) => Math.round((parseKey(b) - parseKey(a)) / 86400000);
+const fmtRange = (e) => (endOf(e) > e.date ? `${fmtKo(e.date)} ~ ${fmtKo(endOf(e))}` : fmtKo(e.date));
 const byDT = (a, b) => (a.date === b.date ? (a.time || "").localeCompare(b.time || "") : a.date.localeCompare(b.date));
 const repShift = (dateKey, kind, i) => {
   const d0 = parseKey(dateKey);
@@ -275,6 +324,7 @@ const defaultSettings = () => ({
     { id: "t_lesson", name: "레슨", color: C.teal, perf: false },
     { id: "t_rec", name: "녹음", color: C.violet, perf: false },
     { id: "t_reh", name: "합주", color: C.blue, perf: false },
+    { id: "t_kns", name: "KNS", color: C.pink, perf: false },
     { id: "t_etc", name: "기타", color: C.gray, perf: false },
   ],
   incomeCats: ["연주", "레슨", "녹음", "기타수입"],
@@ -343,6 +393,30 @@ function normalizeBackup(obj) {
   } else if (!Array.isArray(out.memoBlocks)) {
     out.memoBlocks = [];
   }
+  /* 예전 버전 오타 "기터" → "기타" 자동 수정 (일정 유형 · 가계부 카테고리 · 거래 내역) */
+  const fixTypo = (v) => (typeof v === "string" ? v.replace(/기터/g, "기타") : v);
+  out.settings.eventTypes = out.settings.eventTypes.map((t) => ({ ...t, name: fixTypo(t.name) }));
+  out.settings.incomeCats = [...new Set(out.settings.incomeCats.map(fixTypo))];
+  out.settings.expenseCats = [...new Set(out.settings.expenseCats.map(fixTypo))];
+  out.transactions = out.transactions.map((t) => (t.category && t.category.includes("기터") ? { ...t, category: fixTypo(t.category) } : t));
+  /* 한 번만 실행되는 데이터 이관 — 사용자가 나중에 지운 항목을 다시 살리지 않도록 표시를 남겨요 */
+  const mg = { ...(out.settings.migrations || {}) };
+  if (!mg.kns) {
+    const types = out.settings.eventTypes;
+    if (!types.some((t) => t.id === "t_kns" || (t.name || "").trim().toUpperCase() === "KNS")) {
+      const kns = { id: "t_kns", name: "KNS", color: C.pink, perf: false };
+      const at = types.findIndex((t) => t.id === "t_etc" || t.name === "기타");
+      out.settings.eventTypes = at < 0 ? [...types, kns] : [...types.slice(0, at), kns, ...types.slice(at)];
+    }
+    mg.kns = true;
+  }
+  if (!mg.noteTitle) {
+    out.students = (out.students || []).map((x) => ({ ...x, records: (x.records || []).map((r) => (r.title === undefined ? { ...r, title: r.progress || "" } : r)) }));
+    mg.noteTitle = true;
+  }
+  out.settings.migrations = mg;
+  /* 여러 날 일정: 시작일보다 앞선 종료일은 비움 */
+  out.events = (out.events || []).map((e) => (e.endDate && !(e.endDate > e.date) ? { ...e, endDate: "" } : e));
   /* 긱 멤버 필드 정규화: id와 inst 필드 보장 */
   out.events = (out.events || []).map((e) => {
     if (!Array.isArray(e.members)) return e;
@@ -362,11 +436,11 @@ function seedData() {
   const k = (off) => keyOf(new Date(t.getFullYear(), t.getMonth(), t.getDate() + off));
   const students = [
     { id: uid(), name: "지훈", info: "수 17:00", contact: "010-0000-0000", memo: "고등학생 · 밴드부", progressId: "cu_3", att: { [k(-7)]: "O" }, absents: [], records: [
-      { id: uid(), date: k(-7), status: "출석", progress: "8비트 응용 패턴 4번까지", feedback: "하이햇 오픈 타이밍이 좋아짐. 필인에서 급해지는 습관 체크." },
-      { id: uid(), date: k(0), status: "출석", progress: "16비트 기초 진입", feedback: "고스트 노트 볼륨 조절 과제로." },
+      { id: uid(), date: k(-7), status: "출석", title: "8비트 응용 패턴 4번까지", feedback: "하이햇 오픈 타이밍이 좋아짐. 필인에서 급해지는 습관 체크." },
+      { id: uid(), date: k(0), status: "출석", title: "16비트 기초 진입", feedback: "고스트 노트 볼륨 조절 과제로." },
     ] },
     { id: uid(), name: "서연", info: "토 11:00", contact: "", memo: "취미 성인반", progressId: "cu_1", records: [
-      { id: uid(), date: k(-5), status: "보강", progress: "모엘러 주법 2단계", feedback: "손목 힘 빼는 감각이 좋아짐." },
+      { id: uid(), date: k(-5), status: "보강", title: "모엘러 주법 2단계", feedback: "손목 힘 빼는 감각이 좋아짐." },
     ] },
   ];
   const events = [
@@ -609,12 +683,74 @@ function MoneyInp({ value, onChange, placeholder }) {
   );
 }
 
-/* 시간 입력: 5분 단위 자동 보정 (예: 14:37 → 14:35) */
-function TimeInp({ value, onChange }) {
+/* ───── 시간 입력: 아이폰식 3단 휠 (오전/오후 · 시 · 분) — 분은 5분 단위 ───── */
+const WH = 40; /* 휠 한 칸 높이 */
+function Wheel({ items, index, onChange, width }) {
+  const ref = useRef(null);
+  const t = useRef(null);
+  useEffect(() => { if (ref.current) ref.current.scrollTop = index * WH; }, []);
+  const onScroll = () => {
+    clearTimeout(t.current);
+    t.current = setTimeout(() => {
+      const el = ref.current;
+      if (!el) return;
+      const i = Math.max(0, Math.min(items.length - 1, Math.round(el.scrollTop / WH)));
+      if (Math.abs(el.scrollTop - i * WH) > 1) el.scrollTo({ top: i * WH, behavior: "smooth" });
+      if (i !== index) onChange(i);
+    }, 90);
+  };
   return (
-    <input className="inp" type="time" step={300} value={value || ""}
-      onChange={(e) => onChange(e.target.value)}
-      onBlur={(e) => { const s5 = snap5(e.target.value); if (s5 !== e.target.value) onChange(s5); }} />
+    <div ref={ref} onScroll={onScroll} style={{ width, height: WH * 5, overflowY: "auto", scrollSnapType: "y mandatory", WebkitOverflowScrolling: "touch", position: "relative", zIndex: 2 }}>
+      <div style={{ height: WH * 2 }} />
+      {items.map((it, i) => (
+        <div key={i} onClick={() => { ref.current && ref.current.scrollTo({ top: i * WH, behavior: "smooth" }); onChange(i); }}
+          style={{ height: WH, lineHeight: WH + "px", textAlign: "center", scrollSnapAlign: "center", fontSize: i === index ? 21 : 18, fontWeight: i === index ? 700 : 500, color: i === index ? C.text : C.faint, fontVariantNumeric: "tabular-nums", transition: "color .12s, font-size .12s" }}>{it}</div>
+      ))}
+      <div style={{ height: WH * 2 }} />
+    </div>
+  );
+}
+const timeLabel = (t) => { const [h, m] = t.split(":").map(Number); return `${h < 12 ? "오전" : "오후"} ${h % 12 === 0 ? 12 : h % 12}:${pad(m)}`; };
+const MIN5 = ["00", "05", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55"];
+function TimePicker({ value, onDone, onClear, close }) {
+  const ok = /^\d{1,2}:\d{2}$/.test(value || "");
+  const h0 = ok ? Number(value.split(":")[0]) : 19;
+  const m0 = ok ? value.split(":")[1] : "00";
+  /* 예전에 저장된 5분 단위가 아닌 분(예: 07)은 그대로 고를 수 있게 목록에 남겨둬요 */
+  const mins = MIN5.includes(m0) ? MIN5 : [...MIN5, m0].sort();
+  const [ap, setAp] = useState(h0 < 12 ? 0 : 1);
+  const [hi, setHi] = useState((h0 % 12 === 0 ? 12 : h0 % 12) - 1);
+  const [mi, setMi] = useState(mins.indexOf(m0));
+  const done = () => { const h12 = hi + 1; const h24 = ap === 0 ? (h12 === 12 ? 0 : h12) : (h12 === 12 ? 12 : h12 + 12); onDone(`${pad(h24)}:${mins[mi]}`); close(); };
+  return ReactDOM.createPortal(
+    <div style={{ position: "fixed", inset: 0, zIndex: 85, display: "flex", alignItems: "flex-end", justifyContent: "center", fontFamily: FONT, color: C.text }}>
+      <div onClick={close} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", animation: "fade .15s ease" }} />
+      <div style={{ position: "relative", width: "100%", maxWidth: 520, background: "#14120B", border: `1px solid ${C.line2}`, borderBottom: "none", borderRadius: "22px 22px 0 0", padding: "8px 14px calc(16px + env(safe-area-inset-bottom))", animation: "up .25s cubic-bezier(.2,.9,.3,1)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 2px 6px" }}>
+          <button onClick={close} style={{ background: "none", border: "none", color: C.dim, fontSize: 15, fontWeight: 700, padding: 8 }}>취소</button>
+          {ok && <button onClick={() => { onClear(); close(); }} style={{ background: "none", border: "none", color: C.faint, fontSize: 13.5, fontWeight: 700, padding: 8 }}>시간 지우기</button>}
+          <button onClick={done} style={{ background: "none", border: "none", color: C.gold, fontSize: 15, fontWeight: 800, padding: 8 }}>완료</button>
+        </div>
+        <div style={{ position: "relative", display: "flex", justifyContent: "center", gap: 6 }}>
+          <div style={{ position: "absolute", left: 6, right: 6, top: WH * 2, height: WH, borderRadius: 11, background: "rgba(255,255,255,0.07)", zIndex: 1, pointerEvents: "none" }} />
+          <Wheel items={["오전", "오후"]} index={ap} onChange={setAp} width={74} />
+          <Wheel items={Array.from({ length: 12 }, (_, i) => String(i + 1))} index={hi} onChange={setHi} width={70} />
+          <Wheel items={mins} index={mi} onChange={setMi} width={70} />
+          <div style={{ position: "absolute", inset: 0, zIndex: 3, pointerEvents: "none", background: "linear-gradient(#14120B, rgba(20,18,11,0) 34%, rgba(20,18,11,0) 66%, #14120B)" }} />
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+function TimeInp({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ok = /^\d{1,2}:\d{2}$/.test(value || "");
+  return (
+    <>
+      <button type="button" className="inp" onClick={() => setOpen(true)} style={{ textAlign: "left", minHeight: 47, color: ok ? C.text : C.faint, fontVariantNumeric: "tabular-nums" }}>{ok ? timeLabel(value) : "시간 선택"}</button>
+      {open && <TimePicker value={value} onDone={onChange} onClear={() => onChange("")} close={() => setOpen(false)} />}
+    </>
   );
 }
 
@@ -773,7 +909,9 @@ function EventCard({ ev, showDate }) {
   const tc = (type && type.color) || C.gray;
   const dd = ddays(ev.date);
   const ddLabel = showDate ? (dd === 0 ? " · 오늘" : dd === 1 ? " · 내일" : dd > 1 ? ` · D-${dd}` : "") : "";
-  const lessonNo = isLessonType(type) ? lessonNoOf(d.events, ev) : null;
+  const lessonNo = isLessonType(type) ? lessonNoOf(d.events, ev, d.students) : null;
+  const stu = ev.studentId ? d.students.find((x) => x.id === ev.studentId) : null;
+  const am = stu && stu.att ? AMK[stu.att[ev.date]] : null;
   return (
     <div className="press" onClick={() => open({ k: "event", init: { id: ev.id } })} style={{ display: "flex", alignItems: "stretch", background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, marginBottom: 9, overflow: "hidden", cursor: "pointer" }}>
       <div style={{ width: 4, background: tc, flexShrink: 0, boxShadow: `1px 0 10px ${tc}40` }} />
@@ -781,10 +919,12 @@ function EventCard({ ev, showDate }) {
         <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 5 }}>
           <span style={{ fontSize: 15.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.title}{lessonNo ? ` (${lessonNo}회)` : ""}</span>
           <TypeBadge type={type} />
+          {am && <span style={{ fontSize: 10.5, fontWeight: 800, color: am.c, background: am.bg, border: `1px solid ${am.bd}`, padding: "2px 7px", borderRadius: 100, flexShrink: 0 }}>{am.label}</span>}
         </div>
         <div style={{ fontSize: 12.5, color: C.dim, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          {showDate && <span style={{ fontWeight: 700, color: dd === 0 ? C.gold : C.dim }}>{fmtKo(ev.date)}{ddLabel}</span>}
-          {ev.time && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Clock size={11} color={C.faint} /><span style={{ fontFamily: DISP, fontSize: 13.5, letterSpacing: "0.05em", color: C.text, lineHeight: 1, paddingTop: 1 }}>{ev.time}</span></span>}
+          {(showDate || endOf(ev) > ev.date) && <span style={{ fontWeight: 700, color: showDate && dd === 0 ? C.gold : C.dim }}>{showDate ? fmtRange(ev) : `${fmtKo(ev.date).split(" ")[0]} ~ ${fmtKo(endOf(ev)).split(" ")[0]}`}{ddLabel}</span>}
+          {ev.allDay && <span style={{ fontSize: 11, fontWeight: 800, color: C.gold, border: "1px solid rgba(233,190,88,0.4)", padding: "1px 7px", borderRadius: 100 }}>하루종일</span>}
+          {!ev.allDay && ev.time && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Clock size={11} color={C.faint} /><span style={{ fontFamily: DISP, fontSize: 13.5, letterSpacing: "0.05em", color: C.text, lineHeight: 1, paddingTop: 1 }}>{ev.time}</span></span>}
           {ev.venue && <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><MapPin size={11} />{ev.venue}</span>}
         </div>
       </div>
@@ -809,10 +949,7 @@ function HomeTab() {
   const greet = hour < 5 ? "늦은 밤의 리듬 속에서" : hour < 11 ? "좋은 아침이에요" : hour < 17 ? "오늘도 그루브하게" : hour < 22 ? "무대 뒤, 준비됐나요" : "오늘 하루도 수고했어요";
   const name = (d.settings.userName || "").trim();
   const dateStr = `${now.getMonth() + 1}월 ${now.getDate()}일 ${WK[now.getDay()]}요일`;
-  const [qi, setQi] = useState(() => Math.floor(Math.random() * 100));
-  const vals = d.settings.values;
-  const quote = vals.length ? vals[qi % vals.length] : null;
-  const todayEvs = d.events.filter((e) => e.date === tk).slice().sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+  const todayEvs = d.events.filter((e) => covers(e, tk)).slice().sort((a, b) => (a.time || "").localeCompare(b.time || ""));
   const upcoming = d.events.filter((e) => e.date > tk).slice().sort(byDT).slice(0, 4);
   const ym = tk.slice(0, 7);
   const perfIds = d.settings.eventTypes.filter((t) => t.perf).map((t) => t.id);
@@ -820,10 +957,10 @@ function HomeTab() {
   const income = d.transactions.filter((t) => t.type === "수입" && t.date.startsWith(ym)).reduce((s, t) => s + t.amount, 0);
   const unpaid = d.events.filter((e) => e.fee > 0 && !e.paid && e.date <= tk);
   const unpaidSum = unpaid.reduce((s, e) => s + e.fee, 0);
-  const nextStage = d.events.filter((e) => perfIds.includes(e.typeId) && e.date >= tk).slice().sort(byDT)[0] || null;
+  const nextStage = d.events.filter((e) => perfIds.includes(e.typeId) && endOf(e) >= tk).slice().sort(byDT)[0] || null;
   const todayList = todayEvs.filter((e) => !nextStage || e.id !== nextStage.id);
   const upcomingList = upcoming.filter((e) => !nextStage || e.id !== nextStage.id).slice(0, 3);
-  const nsDD = nextStage ? ddays(nextStage.date) : 0;
+  const nsDD = nextStage ? Math.max(0, ddays(nextStage.date)) : 0;
   return (
     <>
       <div style={{ margin: "26px 2px 0" }}>
@@ -838,8 +975,9 @@ function HomeTab() {
           </div>
           <div style={{ fontSize: 17.5, fontWeight: 800, marginBottom: 6 }}>{nextStage.title}</div>
           <div style={{ fontSize: 12.5, color: C.dim, display: "flex", gap: 11, flexWrap: "wrap", alignItems: "center" }}>
-            <span style={{ fontWeight: 700 }}>{fmtKo(nextStage.date)}</span>
-            {nextStage.time && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Clock size={11} color={C.faint} /><span style={{ fontFamily: DISP, fontSize: 13.5, letterSpacing: "0.05em", color: C.text, lineHeight: 1, paddingTop: 1 }}>{nextStage.time}</span></span>}
+            <span style={{ fontWeight: 700 }}>{fmtRange(nextStage)}</span>
+            {nextStage.allDay && <span style={{ fontWeight: 800, color: C.gold }}>하루종일</span>}
+            {!nextStage.allDay && nextStage.time && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Clock size={11} color={C.faint} /><span style={{ fontFamily: DISP, fontSize: 13.5, letterSpacing: "0.05em", color: C.text, lineHeight: 1, paddingTop: 1 }}>{nextStage.time}</span></span>}
             {nextStage.venue && <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><MapPin size={11} />{nextStage.venue}</span>}
           </div>
         </div>
@@ -849,14 +987,6 @@ function HomeTab() {
           <StatCard label="이번 달 연주" val={`${perfCount}회`} onClick={() => setTab("cal")} />
           <StatCard label="이번 달 입금" val={wonShort(income)} tint={C.teal} onClick={() => setTab("money")} />
           <StatCard label="미입금" val={wonShort(unpaidSum)} tint={unpaidSum > 0 ? C.red : C.faint} onClick={() => setTab("money")} />
-        </div>
-      )}
-      {on("values") && quote && (
-        <div className="press" onClick={() => setQi((i) => i + 1)} style={{ marginTop: 14, position: "relative", borderRadius: 20, border: "1px solid rgba(233,190,88,0.26)", background: "linear-gradient(140deg, rgba(233,190,88,0.13), rgba(233,190,88,0.03) 55%, rgba(0,0,0,0))", padding: "20px 20px 16px" }}>
-          <div style={{ position: "absolute", top: -8, left: "50%", transform: "translateX(-50%) rotate(-2.5deg)", width: 76, height: 17, background: "rgba(233,190,88,0.14)", border: "1px solid rgba(233,190,88,0.18)", borderRadius: 2 }} />
-          <Quote size={16} color={C.gold} style={{ marginBottom: 9, opacity: 0.9 }} />
-          <div style={{ fontFamily: SERIF, fontSize: 16.5, lineHeight: 1.62, fontWeight: 600, color: "#F7F0DC" }}>{quote.text}</div>
-          <div style={{ marginTop: 11, fontSize: 10.5, color: C.faint, fontWeight: 800, letterSpacing: "0.08em" }}>나의 음악 가치관 · 탭해서 다음 문장</div>
         </div>
       )}
       {on("unpaid") && unpaid.length > 0 && (
@@ -936,12 +1066,10 @@ function TodoWidget() {
 
 /* ───────────── 일정 탭 (캘린더 + 베뉴 섭외) ───────────── */
 function ScheduleTab() {
-  const [seg, setSeg] = useState("캘린더");
   return (
     <>
-      <TabTitle title="일정" sub="섭외부터 입금까지, 한 흐름으로" />
-      <Seg opts={["캘린더", "베뉴 섭외"]} val={seg} onChange={setSeg} />
-      {seg === "캘린더" ? <CalendarView /> : <VenueView />}
+      <TabTitle title="일정" />
+      <CalendarView />
     </>
   );
 }
@@ -957,10 +1085,18 @@ function CalendarView() {
     const mk = `${c.y}-${pad(c.m + 1)}`;
     if (!sel.startsWith(mk)) setSel(tk.startsWith(mk) ? tk : `${mk}-01`);
   };
-  const evByDate = useMemo(() => { const m = {}; d.events.forEach((e) => { (m[e.date] = m[e.date] || []).push(e); }); return m; }, [d.events]);
-  const dayEvs = (evByDate[sel] || []).slice().sort((a, b) => (a.time || "").localeCompare(b.time || ""));
-  const upcoming = useMemo(() => d.events.filter((e) => e.date >= tk).slice().sort(byDT), [d.events, tk]);
-  const upDates = [...new Set(upcoming.map((e) => e.date))];
+  const evByDate = useMemo(() => {
+    const m = {};
+    d.events.forEach((e) => {
+      const n = Math.min(spanDays(e.date, endOf(e)), 366);
+      for (let i = 0; i <= n; i++) { const k = i ? addDays(e.date, i) : e.date; (m[k] = m[k] || []).push(e); }
+    });
+    return m;
+  }, [d.events]);
+  const dayEvs = (evByDate[sel] || []).slice().sort((a, b) => (a.allDay ? "" : a.time || "").localeCompare(b.allDay ? "" : b.time || ""));
+  const upcoming = useMemo(() => d.events.filter((e) => endOf(e) >= tk).slice().sort(byDT), [d.events, tk]);
+  const shownDate = (e) => (e.date < tk ? tk : e.date);
+  const upDates = [...new Set(upcoming.map(shownDate))].sort();
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "16px 0 4px" }}>
@@ -985,9 +1121,9 @@ function CalendarView() {
               <div style={{ fontSize: 12.5, fontWeight: 800, color: dk === tk ? C.gold : C.dim, margin: "16px 2px 8px" }}>
                 {fmtKo(dk)}{dk === tk ? " · 오늘" : ddays(dk) === 1 ? " · 내일" : ` · D-${ddays(dk)}`}
               </div>
-              {upcoming.filter((e) => e.date === dk).map((e) => <EventCard key={e.id} ev={e} />)}
+              {upcoming.filter((e) => shownDate(e) === dk).map((e) => <EventCard key={e.id} ev={e} />)}
             </div>
-          )) : <Empty Icon={CalendarDays} title="다가오는 일정이 없어요" sub="+ 버튼으로 첫 일정을 추가해 보세요" />}
+          )) : <Empty Icon={CalendarDays} title="다가오는 일정이 없어요" />}
         </div>
       )}
       <FAB onClick={() => open({ k: "event", init: { date: mode === "월" ? sel : tk } })} />
@@ -1048,7 +1184,7 @@ function VenueView() {
           <DragList items={list} idOf={(v) => v.id}
             onSort={f === "전체" ? (arr) => setD((x) => ({ ...x, venues: arr })) : null}
             render={(v) => <VenueCard v={v} />} />
-        ) : <Empty Icon={MapPin} title="베뉴가 없어요" sub="섭외할 공연장 · 클럽을 등록하고 연락 상태를 관리해요" />}
+        ) : <Empty Icon={MapPin} title="베뉴가 없어요" />}
       </div>
       <FAB onClick={() => open({ k: "venue" })} />
     </>
@@ -1093,12 +1229,12 @@ function LessonsTab() {
   if (st) return <StudentDetail st={st} back={() => setSid(null)} />;
   return (
     <>
-      <TabTitle title="레슨" sub={d.students.length ? `레슨생 ${d.students.length}명 · 카드를 눌러 진도와 기록을 확인해요` : "레슨생을 등록하고 진도 · 출석 · 피드백을 기록해요"} />
+      <TabTitle title="레슨" />
       {d.students.length ? (
         <DragList items={d.students} idOf={(s0) => s0.id}
           onSort={(arr) => setD((x) => ({ ...x, students: arr }))}
           render={(s0) => <StudentCard s={s0} onClick={() => setSid(s0.id)} />} />
-      ) : <Empty Icon={GraduationCap} title="아직 레슨생이 없어요" sub="+ 버튼으로 첫 레슨생을 등록해 보세요" />}
+      ) : <Empty Icon={GraduationCap} title="아직 레슨생이 없어요" />}
       <FAB onClick={() => open({ k: "student" })} />
     </>
   );
@@ -1116,8 +1252,9 @@ function StudentCard({ s, onClick }) {
           {s.info && <span style={{ fontSize: 12, color: C.dim, fontWeight: 700 }}>{s.info}</span>}
         </div>
         <div style={{ fontSize: 12.5, color: C.dim, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {last ? `진도 · ${last.progress || "기록 없음"}` : "아직 레슨 기록이 없어요"}
+          {last ? `최근 기록 · ${fmtKo(last.date)}` : "아직 레슨 기록이 없어요"}
         </div>
+        {billingOf(s) && <div style={{ display: "inline-block", marginTop: 6, fontSize: 11, fontWeight: 800, color: C.teal, background: C.tealBg, border: "1px solid rgba(76,201,166,0.35)", padding: "3px 8px", borderRadius: 100, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{billingText(billingOf(s))}</div>}
       </div>
       <div style={{ fontSize: 12, fontWeight: 800, color: C.faint, flexShrink: 0 }}>{s.records.length}회</div>
     </Card>
@@ -1128,15 +1265,11 @@ function StudentDetail({ st, back }) {
   const { d, setD, open } = useApp();
   const [seg, setSeg] = useState("레슨 기록");
   const recs = st.records.slice().sort((a, b) => b.date.localeCompare(a.date));
-  const cnt = (k) => st.records.filter((r) => r.status === k).length;
+  const attVals = Object.values(st.att || {});
+  const cntO = attVals.filter((v) => v === "O").length;
+  const cntL = attVals.filter((v) => v === "L").length;
+  const cntS = (st.skips || []).length;
   const delRec = (rid) => setD((s) => ({ ...s, students: s.students.map((x) => (x.id === st.id ? { ...x, records: x.records.filter((r) => r.id !== rid) } : x)) }));
-  const cur = d.settings.curriculum || [];
-  let pIdx = cur.findIndex((c) => c.id === st.progressId);
-  if (pIdx < 0) pIdx = 0;
-  const setPIdx = (i) => {
-    const j = Math.max(0, Math.min(cur.length - 1, i));
-    setD((s) => ({ ...s, students: s.students.map((x) => (x.id === st.id ? { ...x, progressId: cur[j].id } : x)) }));
-  };
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "18px 0 6px", marginLeft: -10 }}>
@@ -1150,20 +1283,30 @@ function StudentDetail({ st, back }) {
         {st.memo && <span>{st.memo}</span>}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 9 }}>
-        <StatCard label="출석" val={`${cnt("출석")}회`} tint={C.teal} />
-        <StatCard label="보강" val={`${cnt("보강")}회`} tint={C.gold} />
-        <StatCard label="결석" val={`${cnt("결석")}회`} tint={C.red} />
+        <StatCard label="출석" val={`${cntO}회`} tint={AMK.O.c} onClick={() => setSeg("출석부")} />
+        <StatCard label="당일결석" val={`${cntL}회`} tint={AMK.L.c} onClick={() => setSeg("출석부")} />
+        <StatCard label="스킵" val={`${cntS}회`} tint={AMK.S.c} onClick={() => setSeg("출석부")} />
       </div>
-      {cur.length > 0 && (
-        <div style={{ marginTop: 12, borderRadius: 18, border: "1px solid rgba(233,190,88,0.3)", background: C.goldBg, padding: "12px 10px 12px 16px", display: "flex", alignItems: "center", gap: 6 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 10.5, fontWeight: 800, color: C.gold, letterSpacing: "0.12em", marginBottom: 5 }}>현재 진도 · 진도표 {pIdx + 1}/{cur.length}</div>
-            <div style={{ fontSize: 15.5, fontWeight: 800, lineHeight: 1.4 }}>{cur[pIdx].name}</div>
+      {(() => {
+        const b = billingOf(st);
+        if (!b) return (
+          <div className="press" onClick={() => open({ k: "student", init: { id: st.id } })} style={{ marginTop: 12, borderRadius: 16, border: `1px dashed ${C.line2}`, padding: "12px 16px", fontSize: 13, color: C.faint, fontWeight: 700 }}>+ 정산 주기 설정하기</div>
+        );
+        const tk = todayKey();
+        const ls = studentLessons(d.events, st.id);
+        const next = ls.find((e) => e.fee > 0 && !e.paid && e.date >= tk);
+        const due = ls.filter((e) => e.fee > 0 && !e.paid && e.date < tk);
+        return (
+          <div className="press" onClick={() => open({ k: "student", init: { id: st.id } })} style={{ marginTop: 12, borderRadius: 18, border: "1px solid rgba(76,201,166,0.32)", background: C.tealBg, padding: "12px 16px" }}>
+            <div style={{ fontSize: 10.5, fontWeight: 800, color: C.teal, letterSpacing: "0.12em", marginBottom: 5 }}>정산</div>
+            <div style={{ fontSize: 14.5, fontWeight: 800, lineHeight: 1.45 }}>{billingText(b)}</div>
+            <div style={{ fontSize: 12.5, color: C.dim, marginTop: 5, lineHeight: 1.55 }}>
+              {next ? `다음 정산 ${fmtKo(next.date)} · ${won(next.fee)}` : "예정된 정산 레슨이 없어요"}
+              {due.length > 0 && <span style={{ color: C.red, fontWeight: 800 }}> · 미입금 {due.length}건</span>}
+            </div>
           </div>
-          <button className="ib" onClick={() => setPIdx(pIdx - 1)} style={{ opacity: pIdx === 0 ? 0.35 : 1 }}><ChevronLeft size={19} color={C.gold} /></button>
-          <button className="ib" onClick={() => setPIdx(pIdx + 1)} style={{ opacity: pIdx === cur.length - 1 ? 0.35 : 1 }}><ChevronRight size={19} color={C.gold} /></button>
-        </div>
-      )}
+        );
+      })()}
       <div style={{ marginTop: 14 }}>
         <Seg opts={["레슨 기록", "출석부"]} val={seg} onChange={setSeg} />
       </div>
@@ -1174,15 +1317,14 @@ function StudentDetail({ st, back }) {
             <Card key={r.id} style={{ marginBottom: 10 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: 13, fontWeight: 800, color: C.dim }}>{fmtKo(r.date)}</span>
-                <span style={{ fontSize: 11, fontWeight: 800, color: ATT[r.status], background: `${ATT[r.status]}1E`, padding: "3px 9px", borderRadius: 100 }}>{r.status}</span>
                 <div style={{ flex: 1 }} />
                 <button className="ib" style={{ padding: 5 }} onClick={() => open({ k: "record", init: { studentId: st.id, id: r.id } })}><Pencil size={14} color={C.faint} /></button>
                 <button className="ib" style={{ padding: 5 }} onClick={() => delRec(r.id)}><Trash2 size={14} color={C.faint} /></button>
               </div>
-              {r.progress && <div style={{ fontSize: 14.5, fontWeight: 700, marginTop: 9 }}>{r.progress}</div>}
-              {r.feedback && <div style={{ fontSize: 13.5, color: C.dim, marginTop: 6, lineHeight: 1.55 }}>{r.feedback}</div>}
+              {r.title && <div style={{ fontSize: 15, fontWeight: 800, marginTop: 9, lineHeight: 1.4 }}>{r.title}</div>}
+              {r.feedback && <div style={{ fontSize: 13.5, color: C.dim, marginTop: r.title ? 5 : 9, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{r.feedback}</div>}
             </Card>
-          )) : <div style={{ color: C.faint, fontSize: 13.5, padding: "6px 4px" }}>첫 레슨 기록을 추가해 보세요.</div>}
+          )) : <div style={{ color: C.faint, fontSize: 13.5, padding: "6px 4px" }}>아직 레슨 기록이 없어요.</div>}
           <FAB onClick={() => open({ k: "record", init: { studentId: st.id } })} />
         </>
       ) : (
@@ -1201,9 +1343,50 @@ function AttendanceView({ st }) {
   const cols = [
     ...lessons.map((e) => ({ key: "e" + e.id, date: e.date, evId: e.id })),
     ...(st.absents || []).map((a) => ({ key: "a" + a.id, date: a.date, absentId: a.id })),
-  ].sort((a, b) => a.date.localeCompare(b.date));
+    ...(st.skips || []).map((k) => ({ key: "s" + k.id, date: k.date, skipId: k.id })),
+  ].sort((a, b) => a.date.localeCompare(b.date) || (a.evId ? 1 : 0) - (b.evId ? 1 : 0));
   const att = st.att || {};
-  const markOf = (c) => (c.absentId ? "X" : att[c.date] === "O" ? "O" : "");
+  const markOf = (c) => (c.absentId ? "X" : c.skipId ? "S" : att[c.date] === "O" ? "O" : att[c.date] === "L" ? "L" : "");
+  /* 당일결석: 일정은 그대로 두고 회차를 진행한 것으로 계산 · 출석부엔 따로 표시 */
+  const markLate = (c) => {
+    setD((s) => ({ ...s, students: s.students.map((x) => (x.id === st.id ? { ...x, att: { ...(x.att || {}), [c.date]: "L" } } : x)) }));
+    setAsk(null); show("당일결석 처리 · 이번 회차는 진행한 것으로 계산돼요");
+  };
+  /* 스킵: 이 회차와 이후 반복 일정 전체를 한 주기 뒤로 이동 (회차 · 입금 · 반복 정보 유지) */
+  const markSkip = (c) => {
+    let moved = false;
+    setD((s) => {
+      const ev = s.events.find((e) => e.id === c.evId);
+      if (!ev) return s;
+      const gap = groupGapOf(s.events, ev);
+      const hit = (e) => e.id === ev.id || (ev.groupId && e.groupId === ev.groupId && e.date >= ev.date);
+      const events = s.events.map((e) => (hit(e) ? { ...e, date: shiftByGap(e.date, gap, 1), ...(e.endDate ? { endDate: shiftByGap(e.endDate, gap, 1) } : {}) } : e));
+      moved = true;
+      const students = s.students.map((x) => {
+        if (x.id !== st.id) return x;
+        const a2 = { ...(x.att || {}) };
+        delete a2[c.date];
+        return { ...x, att: a2, skips: [...(x.skips || []), { id: uid(), date: c.date, evId: ev.id, groupId: ev.groupId || null, gap }] };
+      });
+      return recalcGroupFees({ ...s, events, students }, ev.groupId, st.id);
+    });
+    setAsk(null); show("스킵 · 이후 레슨이 한 주기씩 뒤로 밀렸어요");
+  };
+  /* 스킵 취소: 밀었던 일정을 다시 앞으로 당겨 원래 날짜로 복구 */
+  const removeSkip = (c) => {
+    const rec = (st.skips || []).find((k) => k.id === c.skipId);
+    setD((s) => {
+      let events = s.events;
+      if (rec) {
+        const gap = rec.gap || 7;
+        const hit = (e) => e.id === rec.evId || (rec.groupId && e.groupId === rec.groupId && e.date > rec.date);
+        events = s.events.map((e) => (hit(e) ? { ...e, date: shiftByGap(e.date, gap, -1), ...(e.endDate ? { endDate: shiftByGap(e.endDate, gap, -1) } : {}) } : e));
+      }
+      const students = s.students.map((x) => (x.id === st.id ? { ...x, skips: (x.skips || []).filter((k) => k.id !== c.skipId) } : x));
+      return recalcGroupFees({ ...s, events, students }, rec && rec.groupId, st.id);
+    });
+    setAsk(null); show("스킵을 취소하고 일정을 원래대로 되돌렸어요");
+  };
   const markPresent = (c) => {
     setD((s) => ({ ...s, students: s.students.map((x) => (x.id === st.id ? { ...x, att: { ...(x.att || {}), [c.date]: "O" } } : x)) }));
     setAsk(null); show("출석 처리했어요");
@@ -1220,7 +1403,7 @@ function AttendanceView({ st }) {
       let s2 = { ...s, students: s.students.map((x) => (x.id === st.id ? { ...x, absents: (x.absents || []).filter((a) => a.id !== c.absentId) } : x)) };
       if (rec && rec.ev && !s2.events.some((e) => e.id === rec.ev.id)) {
         s2 = { ...s2, events: [...s2.events, { ...rec.ev, paid: false, paidDate: "" }] };
-        s2 = recalcGroupFees(s2, rec.ev.groupId);
+        s2 = recalcGroupFees(s2, rec.ev.groupId, st.id);
       }
       return s2;
     });
@@ -1233,7 +1416,7 @@ function AttendanceView({ st }) {
       let s2 = s;
       if (ev) {
         s2 = { ...s2, events: s2.events.filter((e) => e.id !== ev.id), transactions: s2.transactions.filter((t) => t.eventId !== ev.id) };
-        s2 = recalcGroupFees(s2, ev.groupId);
+        s2 = recalcGroupFees(s2, ev.groupId, st.id);
       }
       const students = s2.students.map((x) => (x.id === st.id ? { ...x, absents: [...(x.absents || []), { id: uid(), date: c.date, ev: ev || null }] } : x));
       return { ...s2, students };
@@ -1256,11 +1439,11 @@ function AttendanceView({ st }) {
               </div>
               {cols.map((rc, i) => (
                 <div key={rc.key} style={{ display: "flex", alignItems: "center", borderTop: `1px solid ${C.line}` }}>
-                  <div style={{ width: 46, flexShrink: 0, fontSize: 11.5, fontWeight: 800, color: rc.absentId ? C.red : C.dim, padding: "9px 0" }}>{(() => { if (rc.absentId) return "결석"; const e0 = d.events.find((x) => x.id === rc.evId); const no = e0 ? lessonNoOf(d.events, e0) : null; return no ? `${no}회` : "-"; })()}</div>
+                  <div style={{ width: 46, flexShrink: 0, fontSize: 11.5, fontWeight: 800, color: rc.absentId ? C.red : rc.skipId ? C.violet : C.dim, padding: "9px 0" }}>{(() => { if (rc.absentId) return "결석*"; if (rc.skipId) return "스킵"; const e0 = d.events.find((x) => x.id === rc.evId); const no = e0 ? lessonNoOf(d.events, e0, d.students) : null; return no ? `${no}회` : "-"; })()}</div>
                   {cols.map((c, j) => (
                     <div key={c.key} style={{ width: 46, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: "5px 0" }}>
                       {j === i ? (
-                        <button className="press" onClick={() => setAsk(c)} style={{ width: 32, height: 32, borderRadius: 10, border: `1.5px solid ${markOf(c) === "O" ? "rgba(76,201,166,0.5)" : markOf(c) === "X" ? "rgba(229,107,87,0.5)" : C.line2}`, background: markOf(c) === "O" ? C.tealBg : markOf(c) === "X" ? C.redBg : "transparent", color: markOf(c) === "O" ? C.teal : markOf(c) === "X" ? C.red : C.faint, fontSize: 13.5, fontWeight: 800 }}>{markOf(c) || "·"}</button>
+                        (() => { const m = AMK[markOf(c)]; return <button className="press" onClick={() => setAsk(c)} style={{ width: 32, height: 32, borderRadius: 10, border: `1.5px solid ${m ? m.bd : C.line2}`, background: m ? m.bg : "transparent", color: m ? m.c : C.faint, fontSize: 13.5, fontWeight: 800 }}>{m ? m.sym : "·"}</button>; })()
                       ) : (
                         <span style={{ color: C.line2, fontSize: 12 }}>-</span>
                       )}
@@ -1270,29 +1453,38 @@ function AttendanceView({ st }) {
               ))}
             </div>
           </Card>
-          <div style={{ fontSize: 12, color: C.faint, padding: "8px 4px 0", lineHeight: 1.6 }}>셀을 누르면 출석(O)/결석(X)을 기록해요. 결석하면 그 날짜 레슨이 캘린더에서 삭제되고 이후 회차와 입금(매 1회차)이 한 회 뒤로 밀려요. 결석 셀을 다시 누르면 취소하고 일정을 복구할 수 있어요.</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 14px", padding: "10px 4px 0" }}>
+            {["O", "L", "S"].map((k) => (
+              <div key={k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700, color: C.dim }}>
+                <span style={{ width: 20, height: 20, borderRadius: 6, border: `1.5px solid ${AMK[k].bd}`, background: AMK[k].bg, color: AMK[k].c, fontSize: 11, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{AMK[k].sym}</span>{AMK[k].label}
+              </div>
+            ))}
+          </div>
         </>
       ) : (
-        <Empty Icon={CalendarDays} title="예정된 레슨이 없어요" sub="캘린더에서 레슨 일정을 만들 때 학생을 연결하면 출석부가 자동으로 만들어져요" />
+        <Empty Icon={CalendarDays} title="예정된 레슨이 없어요" />
       )}
       {ask && (
         <div style={{ position: "fixed", inset: 0, zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
           <div onClick={() => setAsk(null)} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.62)", animation: "fade .15s ease" }} />
           <div style={{ position: "relative", width: "100%", maxWidth: 340, background: "#14120B", border: `1px solid ${C.line2}`, borderRadius: 20, padding: 18, animation: "up .2s cubic-bezier(.2,.9,.3,1)" }}>
             <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 6 }}>{fmtKo(ask.date)} · {st.name}</div>
-            {ask.absentId ? (
+            {ask.skipId ? (
               <>
-                <div style={{ fontSize: 12.5, color: C.dim, lineHeight: 1.6, marginBottom: 14 }}>{(() => { const rec = (st.absents || []).find((a) => a.id === ask.absentId); return rec && rec.ev ? "결석으로 기록된 날이에요. 결석을 취소하면 삭제됐던 일정이 복구되고 회차 · 입금이 원래대로 재계산돼요." : "결석으로 기록된 날이에요. 이 기록은 일정 정보가 없어 기록만 삭제돼요."; })()}</div>
+                <Btn style={{ width: "100%", marginBottom: 8, background: AMK.S.bg, color: AMK.S.c, border: `1px solid ${AMK.S.bd}` }} onClick={() => removeSkip(ask)}>스킵 취소 (일정 되돌리기)</Btn>
+              </>
+            ) : ask.absentId ? (
+              <>
                 <Btn kind="d" style={{ width: "100%", marginBottom: 8 }} onClick={() => removeAbsent(ask)}>{(() => { const rec = (st.absents || []).find((a) => a.id === ask.absentId); return rec && rec.ev ? "결석 취소 (일정 복구)" : "결석 기록 삭제"; })()}</Btn>
               </>
             ) : (
               <>
-                <div style={{ fontSize: 12.5, color: C.dim, lineHeight: 1.6, marginBottom: 14 }}>결석(X)을 선택하면 이 날짜 레슨이 캘린더에서 삭제되고, 이후 회차와 입금(매 1회차)이 한 회 뒤로 밀려요.</div>
-                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                  <Btn style={{ flex: 1, background: C.tealBg, color: C.teal, border: "1px solid rgba(76,201,166,0.4)" }} onClick={() => markPresent(ask)}>출석 O</Btn>
-                  <Btn kind="d" style={{ flex: 1 }} onClick={() => markAbsent(ask)}>결석 X</Btn>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+                  {[["O", () => markPresent(ask)], ["L", () => markLate(ask)], ["S", () => markSkip(ask)]].map(([k, fn]) => (
+                    <Btn key={k} style={{ background: AMK[k].bg, color: AMK[k].c, border: `1px solid ${AMK[k].bd}`, padding: "13px 4px", fontSize: 13.5, flexDirection: "column", gap: 3 }} onClick={fn}><span style={{ fontSize: 16 }}>{AMK[k].sym}</span>{AMK[k].label}</Btn>
+                  ))}
                 </div>
-                {markOf(ask) === "O" && <Btn kind="g" style={{ width: "100%", marginBottom: 8 }} onClick={() => clearMark(ask)}>출석 기록 지우기</Btn>}
+                {(markOf(ask) === "O" || markOf(ask) === "L") && <Btn kind="g" style={{ width: "100%", marginBottom: 8 }} onClick={() => clearMark(ask)}>{AMK[markOf(ask)].label} 기록 지우기</Btn>}
               </>
             )}
             <Btn kind="g" style={{ width: "100%" }} onClick={() => setAsk(null)}>닫기</Btn>
@@ -1312,7 +1504,7 @@ function PracticeTab() {
   const [segK, setSegK] = useState("routine");
   return (
     <>
-      <TabTitle title="연습" sub={`${P.routine} · ${P.memo}`} />
+      <TabTitle title="연습" />
       <Seg opts={labels} val={P[segK]} onChange={(l) => setSegK(keys[labels.indexOf(l)] || "routine")} />
       {segK === "routine" && <RoutineView />}
       {segK === "memo" && <MemoView />}
@@ -1356,7 +1548,7 @@ function RoutineView() {
                 )} />
             </div>
           </Card>
-        ) : <Empty Icon={Music4} title="루틴이 비어 있어요" sub="+ 버튼으로 연습 블록을 추가하면 비율 그래프로 보여드려요" />}
+        ) : <Empty Icon={Music4} title="루틴이 비어 있어요" />}
         {d.routine.length > 0 && (
           <>
             <SecLabel>최근 7일</SecLabel>
@@ -1418,7 +1610,7 @@ function MemoView() {
                     <span style={{ fontSize: 11.5, fontWeight: 800, color: C.gold, background: C.goldBg, padding: "2px 8px", borderRadius: 100 }}>{ms.length}</span>
                   </div>
                   <div style={{ fontSize: 12.5, color: C.dim, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {last ? `${fmtKo(last.date)} · ${last.text.split("\n")[0]}` : "아직 메모가 없어요 · 눌러서 기록 시작"}
+                    {last ? `${fmtKo(last.date)} · ${last.text.split("\n")[0]}` : "아직 메모가 없어요"}
                   </div>
                 </div>
                 <button className="ib" style={{ padding: 5, flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); rename({ title: "블록 이름 수정", value: b.name, onSave: (n) => setD((s) => ({ ...s, memoBlocks: s.memoBlocks.map((y) => (y.id === b.id ? { ...y, name: n } : y)) })) }); }}><Pencil size={14} color={C.faint} /></button>
@@ -1426,7 +1618,7 @@ function MemoView() {
               </Card>
             );
           }} />
-      ) : <Empty Icon={FileText} title="메모 블록이 없어요" sub="'블록 추가'로 느낀점 · 현재구간 · 다음목표 같은 블록을 만들어 보세요" />}
+      ) : <Empty Icon={FileText} title="메모 블록이 없어요" />}
     </>
   );
 }
@@ -1450,7 +1642,7 @@ function MemoBlockDetail({ block, back }) {
               <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{m.text}</div>
             </Card>
           )} />
-      ) : <Empty Icon={FileText} title="아직 메모가 없어요" sub="날짜별로 이 블록의 기록을 남겨 보세요" />}
+      ) : <Empty Icon={FileText} title="아직 메모가 없어요" />}
       <FAB onClick={() => open({ k: "memo", init: { blockId: block.id } })} />
     </>
   );
@@ -1458,12 +1650,10 @@ function MemoBlockDetail({ block, back }) {
 
 /* ───────────── 머니 탭 ───────────── */
 function MoneyTab() {
-  const [seg, setSeg] = useState("입금 확인");
   return (
     <>
-      <TabTitle title="머니" sub="음악 일의 돈 흐름을 한곳에서" />
-      <Seg opts={["입금 확인", "가계부"]} val={seg} onChange={setSeg} />
-      {seg === "입금 확인" ? <PaymentsView /> : <LedgerView />}
+      <TabTitle title="머니" />
+      <PaymentsView />
     </>
   );
 }
@@ -1508,7 +1698,6 @@ function PaymentsView() {
           </Card>
         );
       }) : <div style={{ color: C.faint, fontSize: 13.5, padding: "12px 4px" }}>이 달에는 해당하는 페이 일정이 없어요.</div>}
-      <div style={{ fontSize: 12, color: C.faint, padding: "6px 4px 0", lineHeight: 1.5 }}>일정에 페이를 입력하면 자동으로 이 목록에 올라오고, 토글을 켜면 입금 처리돼요.</div>
     </>
   );
 }
@@ -1576,7 +1765,7 @@ function LedgerView() {
 function EventSheet({ init }) {
   const { d, setD, close, show, rename } = useApp();
   const editing = init && init.id ? d.events.find((e) => e.id === init.id) : null;
-  const perfDefaults = { callTime: "", showTime: "", ensemble: "", leader: "", members: [], teamNameOn: false, teamName: "", studentId: "" };
+  const perfDefaults = { endDate: "", allDay: false, callTime: "", showTime: "", ensemble: "", leader: "", members: [], teamNameOn: false, teamName: "", studentId: "" };
   const [f, setF] = useState(() => editing
     ? { ...perfDefaults, ...editing, fee: editing.fee ? fmtNum(editing.fee) : "" }
     : { title: "", typeId: (init && init.typeId) || d.settings.eventTypes[0].id, date: (init && init.date) || todayKey(), time: "", venue: (init && init.venue) || "", fee: "", memo: "", paid: false, repeat: "없음", ...perfDefaults });
@@ -1592,7 +1781,8 @@ function EventSheet({ init }) {
   const instList = d.settings.instruments || [];
   const setMember = (id, p) => setF((s) => ({ ...s, members: s.members.map((m) => (m.id === id ? { ...m, ...p } : m)) }));
   /* 정산 주기: 매주 레슨 = 4회(1·2·3·4 순환), 2주마다 = 2회(1·2 순환) — 입금은 매 1회차 */
-  const needCycle = isLesson && repeating && (f.repeat === "매주" || f.repeat === "2주마다");
+  const stB = isLesson && f.studentId ? billingOf(d.students.find((x) => x.id === f.studentId)) : null;
+  const needCycle = !stB && isLesson && repeating && (f.repeat === "매주" || f.repeat === "2주마다");
   const pc = needCycle ? { n: f.repeat === "매주" ? 4 : 2, at: "start" } : null;
   const groupCnt = editing && editing.groupId ? d.events.filter((e) => e.groupId === editing.groupId).length : 0;
   const futureCnt = editing && editing.groupId ? d.events.filter((e) => e.groupId === editing.groupId && e.date >= editing.date).length : 0;
@@ -1600,16 +1790,17 @@ function EventSheet({ init }) {
   const doSave = (applyFuture) => {
     if (!f.date) return;
     const gid = repeating ? "g" + uid() : (editing ? editing.groupId : undefined);
-    const evFee = needCycle ? (pc && payOnSeq(1, pc) ? fee : 0) : fee;
+    const evFee = stB ? (editing ? editing.fee : 0) : needCycle ? (pc && payOnSeq(1, pc) ? fee : 0) : fee;
     const ev = {
       id: editing ? editing.id : uid(),
       title: (f.title || "").trim() || "제목 없는 일정",
-      typeId: f.typeId, date: f.date, time: snap5(f.time || ""),
+      typeId: f.typeId, date: f.date, time: f.allDay ? "" : (f.time || ""),
+      endDate: f.endDate && f.endDate > f.date ? f.endDate : "", allDay: !!f.allDay,
       venue: (f.venue || "").trim(), memo: (f.memo || "").trim(),
       fee: evFee, paid: evFee > 0 && !repeating ? !!f.paid : false,
       paidDate: evFee > 0 && !repeating && f.paid ? (editing && editing.paid && editing.paidDate ? editing.paidDate : todayKey()) : "",
       groupId: gid,
-      callTime: snap5(f.callTime || ""), showTime: snap5(f.showTime || ""),
+      callTime: f.allDay ? "" : (f.callTime || ""), showTime: f.allDay ? "" : (f.showTime || ""),
       ensemble: f.ensemble || "", leader: (f.leader || "").trim(),
       members: (f.members || []).map((m) => ({ id: m.id, inst: m.inst || "", name: (m.name || "").trim() })),
       teamNameOn: !!f.teamNameOn, teamName: (f.teamName || "").trim(),
@@ -1622,7 +1813,8 @@ function EventSheet({ init }) {
     const extras = [];
     if (repeating) {
       for (let i = 1; i < repN; i++) {
-        extras.push({ ...ev, id: uid(), date: repShift(ev.date, f.repeat, i), fee: needCycle ? (pc && payOnSeq(i + 1, pc) ? fee : 0) : fee });
+        const nd = repShift(ev.date, f.repeat, i);
+        extras.push({ ...ev, id: uid(), date: nd, endDate: ev.endDate ? addDays(nd, spanDays(ev.date, ev.endDate)) : "", fee: stB ? 0 : needCycle ? (pc && payOnSeq(i + 1, pc) ? fee : 0) : fee });
       }
     }
     setD((s) => {
@@ -1632,7 +1824,7 @@ function EventSheet({ init }) {
           if (e.id === ev.id) return ev;
           if (applyFuture && gid && e.groupId === gid && e.date >= editing.date) {
             const nf = e.fee > 0 ? ev.fee : e.fee;
-            return { ...e, title: ev.title, typeId: ev.typeId, time: ev.time, venue: ev.venue, memo: ev.memo, fee: nf, paid: nf > 0 ? e.paid : false, paidDate: nf > 0 ? e.paidDate : "", callTime: ev.callTime, showTime: ev.showTime, ensemble: ev.ensemble, leader: ev.leader, members: ev.members, teamNameOn: ev.teamNameOn, teamName: ev.teamName, studentId: ev.studentId };
+            return { ...e, title: ev.title, typeId: ev.typeId, time: ev.time, allDay: ev.allDay, endDate: ev.endDate ? addDays(e.date, spanDays(ev.date, ev.endDate)) : "", venue: ev.venue, memo: ev.memo, fee: nf, paid: nf > 0 ? e.paid : false, paidDate: nf > 0 ? e.paidDate : "", callTime: ev.callTime, showTime: ev.showTime, ensemble: ev.ensemble, leader: ev.leader, members: ev.members, teamNameOn: ev.teamNameOn, teamName: ev.teamName, studentId: ev.studentId };
           }
           return e;
         });
@@ -1663,18 +1855,19 @@ function EventSheet({ init }) {
             return !(e && e.groupId === gid && e.date >= editing.date && e.id !== ev.id && (!e.paid || e.fee <= 0));
           });
       }
-      return { ...s, events, transactions };
+      const out = { ...s, events, transactions };
+      return stB ? recalcStudentFees(out, ev.studentId) : out;
     });
     close();
     show(repeating ? `${f.repeat} 반복 일정을 추가했어요` : editing ? (applyFuture ? "이후 반복 일정까지 수정했어요" : "일정을 수정했어요") : "일정을 추가했어요");
   };
   const delFuture = () => {
     const ids = d.events.filter((e) => e.groupId === editing.groupId && e.date >= editing.date).map((e) => e.id);
-    setD((s) => ({ ...s, events: s.events.filter((e) => !ids.includes(e.id)), transactions: s.transactions.filter((t) => !ids.includes(t.eventId)) }));
+    setD((s) => { const s2 = { ...s, events: s.events.filter((e) => !ids.includes(e.id)), transactions: s.transactions.filter((t) => !ids.includes(t.eventId)) }; return editing.studentId ? recalcStudentFees(s2, editing.studentId) : s2; });
     close(); show("이후 반복 일정까지 삭제했어요");
   };
   const delOne = () => {
-    setD((s) => recalcGroupFees({ ...s, events: s.events.filter((e) => e.id !== editing.id), transactions: s.transactions.filter((t) => t.eventId !== editing.id) }, editing.groupId));
+    setD((s) => recalcGroupFees({ ...s, events: s.events.filter((e) => e.id !== editing.id), transactions: s.transactions.filter((t) => t.eventId !== editing.id) }, editing.groupId, editing.studentId));
     close(); show(editing.groupId ? "일정을 삭제하고 회차 · 입금을 재조정했어요" : "일정을 삭제했어요");
   };
   return (
@@ -1710,13 +1903,20 @@ function EventSheet({ init }) {
             <option value="">선택 안 함</option>
             {d.students.map((st) => <option key={st.id} value={st.id}>{st.name}</option>)}
           </select>
-          <div style={{ fontSize: 11.5, color: C.faint, marginTop: 7, lineHeight: 1.5 }}>학생을 연결하면 레슨 탭의 출석부에 자동으로 나타나요.</div>
         </Fld>
       )}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Fld label="날짜"><input className="inp" type="date" value={f.date} onChange={(e) => u({ date: e.target.value })} /></Fld>
-        <Fld label="시간"><TimeInp value={f.time} onChange={(v) => u({ time: v })} /></Fld>
+        <Fld label="시작일"><input className="inp" type="date" value={f.date} onChange={(e) => { const v = e.target.value; if (!v) return; const span = f.endDate && f.endDate > f.date ? spanDays(f.date, f.endDate) : 0; u({ date: v, endDate: span ? addDays(v, span) : "" }); }} /></Fld>
+        <Fld label="종료일"><input className="inp" type="date" min={f.date} value={f.endDate && f.endDate > f.date ? f.endDate : f.date} onChange={(e) => { const v = e.target.value; u({ endDate: v && v > f.date ? v : "" }); }} /></Fld>
       </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.card2, borderRadius: 13, padding: "12px 15px", marginBottom: 15, gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>하루종일</div>
+          <div style={{ fontSize: 11.5, color: C.faint, marginTop: 2 }}>{f.endDate && f.endDate > f.date ? `${spanDays(f.date, f.endDate) + 1}일 일정` : ""}</div>
+        </div>
+        <Toggle on={!!f.allDay} onChange={(v) => u({ allDay: v })} />
+      </div>
+      {!f.allDay && <Fld label="시간"><TimeInp value={f.time} onChange={(v) => u({ time: v })} /></Fld>}
       {!editing && (
         <Fld label="반복">
           <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
@@ -1724,91 +1924,27 @@ function EventSheet({ init }) {
           </div>
         </Fld>
       )}
-      {repeating && f.date && (
-        <div style={{ fontSize: 12, color: C.faint, margin: "-6px 2px 15px", lineHeight: 1.6 }}>
-          {fmtKo(f.date)}부터 약 1년치가 자동으로 만들어져요 (마지막 {fmtKo(repShift(f.date, f.repeat, repN - 1))}). 하나를 열어 삭제 · 수정할 때 이후 반복까지 한 번에 처리할 수 있어요.
-        </div>
-      )}
       {needCycle && (
         <div style={{ display: "flex", gap: 10, alignItems: "flex-start", background: C.goldBg, border: "1px solid rgba(233,190,88,0.3)", borderRadius: 13, padding: "12px 14px", marginBottom: 15 }}>
           <div style={{ fontSize: 13, fontWeight: 800, color: C.gold, flexShrink: 0 }}>{f.repeat === "매주" ? "4회 정산" : "2회 정산"}</div>
-          <div style={{ fontSize: 12, color: C.dim, lineHeight: 1.55 }}>
-            {f.repeat === "매주"
-              ? "회차가 1·2·3·4로 돌고, 매 1회차에 레슨비가 입금 목록에 잡혀요. 결석하면 회차와 입금이 한 회 뒤로 밀려요."
-              : "회차가 1·2로 돌고, 매 1회차에 레슨비가 입금 목록에 잡혀요. 결석하면 회차와 입금이 한 회 뒤로 밀려요."}
-          </div>
         </div>
       )}
-      {editing && editing.payCycle && (
+      {stB && (
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-start", background: C.goldBg, border: "1px solid rgba(233,190,88,0.3)", borderRadius: 13, padding: "12px 14px", marginBottom: 15 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: C.gold, flexShrink: 0 }}>학생 정산</div>
+          <div style={{ fontSize: 12, color: C.dim, lineHeight: 1.55 }}>{billingText(stB)}</div>
+        </div>
+      )}
+      {!stB && editing && editing.payCycle && (
         <div style={{ fontSize: 12, color: C.faint, margin: "-6px 2px 15px", lineHeight: 1.5 }}>{editing.payCycle.n}회 정산 레슨 · {editing.payCycle.at === "end" ? "매 마지막 회차 입금" : "매 1회차 입금"}</div>
       )}
-      <Fld label="장소"><input className="inp" placeholder="베뉴 · 연습실 이름" value={f.venue} onChange={(e) => u({ venue: e.target.value })} /></Fld>
-      {isPerf && (
-        <>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 13px", paddingTop: 14, borderTop: `1px dashed ${C.line2}` }}>
-            <div style={{ width: 3, height: 11, borderRadius: 1.5, background: C.gold, opacity: 0.85 }} />
-            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", color: C.gold }}>연주 상세</div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Fld label="콜타임"><TimeInp value={f.callTime} onChange={(v) => u({ callTime: v })} /></Fld>
-            <Fld label="공연시간"><TimeInp value={f.showTime} onChange={(v) => u({ showTime: v })} /></Fld>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <Fld label="연주인원">
-              <select className="inp" value={f.ensemble || ""} onChange={(e) => u({ ensemble: e.target.value })}>
-                <option value="">선택 안 함</option>
-                {ensembles.map((en) => <option key={en.id} value={en.name}>{en.name} ({en.size}명)</option>)}
-                {f.ensemble && !ensembles.some((en) => en.name === f.ensemble) && <option value={f.ensemble}>{f.ensemble}</option>}
-              </select>
-            </Fld>
-            <Fld label="리더"><input className="inp" placeholder="이름" value={f.leader} onChange={(e) => u({ leader: e.target.value })} /></Fld>
-          </div>
-          <Fld label="멤버">
-            {(f.members || []).length > 0 && (
-              <div style={{ marginBottom: 2 }}>
-                <DragList items={f.members} idOf={(m) => m.id} useHandle
-                  onSort={(arr) => u({ members: arr })}
-                  render={(m, i, dragging, bind) => (
-                    <div style={{ display: "flex", gap: 7, alignItems: "center", marginBottom: 8 }}>
-                      <span {...bind} style={{ display: "flex", alignItems: "center", padding: "12px 3px", touchAction: "none", cursor: "grab", color: C.faint, flexShrink: 0 }}><Grip size={15} /></span>
-                      <select className="inp" style={{ width: 124, flexShrink: 0 }} value={m.inst} onChange={(e) => setMember(m.id, { inst: e.target.value })}>
-                        {instList.map((it0) => <option key={it0} value={it0}>{it0}</option>)}
-                        {m.inst && !instList.includes(m.inst) && <option value={m.inst}>{m.inst}</option>}
-                      </select>
-                      <input className="inp" style={{ flex: 1, minWidth: 0 }} placeholder="이름" value={m.name} onChange={(e) => setMember(m.id, { name: e.target.value })} />
-                      <button className="ib" style={{ padding: 6, flexShrink: 0 }} onClick={() => setF((s) => ({ ...s, members: s.members.filter((x) => x.id !== m.id) }))}><X size={16} color={C.faint} /></button>
-                    </div>
-                  )} />
-              </div>
-            )}
-            <Btn kind="g" style={{ width: "100%", padding: "11px 0", fontSize: 13.5 }} onClick={() => setF((s) => ({ ...s, members: [...(s.members || []), { id: uid(), inst: instList[0] || "", name: "" }] }))}><Plus size={15} />멤버 추가</Btn>
-            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 7, lineHeight: 1.5 }}>왼쪽 손잡이를 드래그하면 순서가 바뀌어요. 같은 악기도 여러 명 추가할 수 있어요.</div>
-          </Fld>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.card2, borderRadius: 13, padding: "13px 15px", marginBottom: 15, gap: 10 }}>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 700 }}>팀이름 직접 입력</div>
-              <div style={{ fontSize: 11.5, color: C.faint, marginTop: 2 }}>끄면 연주인원 이름(솔로 · 트리오 등)을 추출에 써요</div>
-            </div>
-            <Toggle on={!!f.teamNameOn} onChange={(v) => u({ teamNameOn: v })} />
-          </div>
-          <Fld label="팀이름">
-            <input className="inp" placeholder={f.teamNameOn ? "예) 문라이즈 트리오" : "팀이름 직접 입력을 켜면 쓸 수 있어요"} disabled={!f.teamNameOn} value={f.teamName} onChange={(e) => u({ teamName: e.target.value })} style={{ opacity: f.teamNameOn ? 1 : 0.45 }} />
-          </Fld>
-        </>
-      )}
-      <Fld label={isLesson && repeating ? (needCycle ? "레슨비 (1회차 입금액)" : "레슨비 (매회 기준)") : "페이"}>
+      {!stB && <Fld label={isLesson && repeating ? (needCycle ? "레슨비 (1회차 입금액)" : "레슨비 (매회 기준)") : "페이"}>
         <MoneyInp value={f.fee} onChange={(v) => u({ fee: v })} />
-        {isLesson && repeating && fee > 0 && (
-          <div style={{ fontSize: 12, color: C.faint, marginTop: 7, lineHeight: 1.55 }}>
-            {needCycle ? "위에서 선택한 입금 주기의 회차에만 입금 목록에 잡혀요." : "매월 레슨은 매회 레슨비가 입금 목록에 잡혀요."}
-          </div>
-        )}
-      </Fld>
+      </Fld>}
       {fee > 0 && !repeating && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.card2, borderRadius: 13, padding: "13px 15px", marginBottom: 15, gap: 10 }}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700 }}>입금 완료</div>
-            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 2 }}>{d.settings.autoLedger ? "켜면 가계부에 수입으로 자동 기록돼요" : "입금 상태를 표시해요"}</div>
           </div>
           <Toggle on={!!f.paid} onChange={(v) => u({ paid: v })} />
         </div>
@@ -1838,8 +1974,8 @@ function ExtractSheet() {
     };
     let out = `🥁 ${cur.m + 1}월 연주 일정`;
     evs.forEach((e) => {
-      const t0 = e.showTime || e.time;
-      out += `\n\n${fmtKo(e.date)}${t0 ? " " + fmtK12(t0) : ""}`;
+      const t0 = e.allDay ? "" : (e.showTime || e.time);
+      out += `\n\n${fmtRange(e)}${e.allDay ? " 하루종일" : t0 ? " " + fmtK12(t0) : ""}`;
       if (e.venue) out += `\n@${e.venue}`;
       const team = teamOf(e);
       const mem = (e.members || []).filter((m) => m.name).map((m) => `${m.inst} ${m.name}`.trim()).join(", ");
@@ -1874,7 +2010,6 @@ function ExtractSheet() {
       <div style={{ background: C.card2, border: `1px solid ${C.line2}`, borderRadius: 13, padding: 15, fontSize: 14, lineHeight: 1.7, whiteSpace: "pre-wrap", color: text ? C.text : C.faint, minHeight: 110 }}>
         {text || "이 달에는 선택한 유형의 일정이 없어요."}
       </div>
-      <div style={{ fontSize: 12, color: C.faint, marginTop: 10, lineHeight: 1.5 }}>밴드 단톡방이나 SNS 공지에 바로 붙여넣기 좋게 만들어져요.</div>
     </Sheet>
   );
 }
@@ -1914,15 +2049,26 @@ function VenueSheet({ init }) {
 function StudentSheet({ init }) {
   const { d, setD, close, show } = useApp();
   const editing = init && init.id ? d.students.find((s) => s.id === init.id) : null;
+  /* 정산 설정 초기값: 저장된 설정 → 없으면 기존 반복 레슨의 입금 주기에서 추정 (저장해야 적용됨) */
+  const initBill = (() => {
+    const b = billingOf(editing);
+    if (b) return { bn: b.n, bat: b.at, bamt: b.amount ? fmtNum(b.amount) : "" };
+    const ev = editing ? d.events.find((e) => e.studentId === editing.id && e.payCycle && e.payAmount > 0) : null;
+    return ev ? { bn: ev.payCycle.n, bat: ev.payCycle.at || "start", bamt: fmtNum(ev.payAmount) } : { bn: 0, bat: "start", bamt: "" };
+  })();
   const [f, setF] = useState(() => editing
-    ? { name: editing.name, info: editing.info || "", contact: editing.contact || "", memo: editing.memo || "", progressId: editing.progressId || "" }
-    : { name: "", info: "", contact: "", memo: "", progressId: "" });
+    ? { name: editing.name, info: editing.info || "", contact: editing.contact || "", memo: editing.memo || "", progressId: editing.progressId || "", ...initBill }
+    : { name: "", info: "", contact: "", memo: "", progressId: "", ...initBill });
   const u = (p) => setF((s) => ({ ...s, ...p }));
   const save = () => {
     if (!f.name.trim()) return;
-    setD((s) => editing
-      ? { ...s, students: s.students.map((x) => (x.id === editing.id ? { ...x, name: f.name.trim(), info: f.info, contact: f.contact, memo: f.memo, progressId: f.progressId, att: x.att, absents: x.absents, records: x.records } : x)) }
-      : { ...s, students: [...s.students, { id: uid(), name: f.name.trim(), info: f.info, contact: f.contact, memo: f.memo, progressId: f.progressId, att: {}, absents: [], records: [] }] });
+    const billing = f.bn ? { n: f.bn, at: f.bat === "end" ? "end" : "start", amount: parseNum(f.bamt) } : null;
+    setD((s) => {
+      const s2 = editing
+        ? { ...s, students: s.students.map((x) => (x.id === editing.id ? { ...x, name: f.name.trim(), info: f.info, contact: f.contact, memo: f.memo, progressId: f.progressId, billing, att: x.att, absents: x.absents, skips: x.skips, records: x.records } : x)) }
+        : { ...s, students: [...s.students, { id: uid(), name: f.name.trim(), info: f.info, contact: f.contact, memo: f.memo, progressId: f.progressId, billing, att: {}, absents: [], skips: [], records: [] }] };
+      return editing && billing ? recalcStudentFees(s2, editing.id) : s2;
+    });
     close(); show(editing ? "레슨생 정보를 수정했어요" : "레슨생을 등록했어요");
   };
   const del = () => { setD((s) => ({ ...s, students: s.students.filter((x) => x.id !== editing.id) })); close(); show("레슨생을 삭제했어요"); };
@@ -1931,13 +2077,21 @@ function StudentSheet({ init }) {
       <Fld label="이름"><input className="inp" value={f.name} onChange={(e) => u({ name: e.target.value })} /></Fld>
       <Fld label="레슨 요일 · 시간"><input className="inp" placeholder="예) 수 17:00" value={f.info} onChange={(e) => u({ info: e.target.value })} /></Fld>
       <Fld label="연락처"><input className="inp" placeholder="예) 010-0000-0000" value={f.contact} onChange={(e) => u({ contact: e.target.value })} /></Fld>
-      {(d.settings.curriculum || []).length > 0 && (
-        <Fld label="진도표">
-          <select className="inp" value={f.progressId || ""} onChange={(e) => u({ progressId: e.target.value })}>
-            <option value="">선택 안 함</option>
-            {d.settings.curriculum.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </Fld>
+      <Fld label="정산 주기">
+        <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+          {[[0, "설정 안 함"], [4, "매주 · 4회 정산"], [2, "격주 · 2회 정산"]].map(([n, l]) => <Chip key={n} on={f.bn === n} onClick={() => u({ bn: n })}>{l}</Chip>)}
+        </div>
+      </Fld>
+      {f.bn > 0 && (
+        <>
+          <Fld label="정산 시점">
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+              <Chip on={f.bat !== "end"} onClick={() => u({ bat: "start" })}>선불 · 1회차 마치고</Chip>
+              <Chip on={f.bat === "end"} onClick={() => u({ bat: "end" })}>후불 · {f.bn}회차 마치고</Chip>
+            </div>
+          </Fld>
+          <Fld label={`정산 금액 (${f.bn}회분)`}><MoneyInp value={f.bamt} onChange={(v) => u({ bamt: v })} /></Fld>
+        </>
       )}
       <Fld label="메모"><textarea className="inp" rows={3} placeholder="레벨, 목표, 특이사항..." value={f.memo} onChange={(e) => u({ memo: e.target.value })} /></Fld>
     </Sheet>
@@ -1949,31 +2103,26 @@ function RecordSheet({ init }) {
   const { d, setD, close, show } = useApp();
   const st = d.students.find((s) => s.id === init.studentId);
   const editing = st && init.id ? st.records.find((r) => r.id === init.id) : null;
-  const [f, setF] = useState(() => editing ? { ...editing } : { date: todayKey(), status: "출석", progress: "", feedback: "" });
+  const [f, setF] = useState(() => editing ? { ...editing } : { date: todayKey(), title: "", feedback: "" });
   const u = (p) => setF((s) => ({ ...s, ...p }));
   if (!st) return null;
   const save = () => {
-    const r = { ...f, id: editing ? editing.id : uid() };
+    const r = { ...f, title: (f.title || "").trim(), id: editing ? editing.id : uid() };
     setD((s) => ({ ...s, students: s.students.map((x) => (x.id === init.studentId ? { ...x, records: editing ? x.records.map((y) => (y.id === r.id ? r : y)) : [...x.records, r] } : x)) }));
     close(); show("레슨 기록을 저장했어요");
   };
   return (
     <Sheet title={`${st.name} · 레슨 기록`} footer={<Btn style={{ flex: 1 }} onClick={save}>저장</Btn>}>
       <Fld label="날짜"><input className="inp" type="date" value={f.date} onChange={(e) => u({ date: e.target.value })} /></Fld>
-      <Fld label="출결">
-        <div style={{ display: "flex", gap: 7 }}>
-          {Object.keys(ATT).map((k) => <Chip key={k} on={f.status === k} color={ATT[k]} onClick={() => u({ status: k })}>{k}</Chip>)}
+      <Fld label="노트">
+        <div style={{ background: C.card2, border: `1px solid ${C.line2}`, borderRadius: 13, overflow: "hidden" }}>
+          <input className="inp" placeholder="제목" value={f.title || ""} onChange={(e) => u({ title: e.target.value })}
+            style={{ background: "transparent", border: "none", borderRadius: 0, boxShadow: "none", fontWeight: 800, fontSize: 17, padding: "13px 14px 9px" }} />
+          <div style={{ height: 1, background: C.line, margin: "0 14px" }} />
+          <textarea className="inp" rows={6} placeholder="내용을 적어보세요" value={f.feedback || ""} onChange={(e) => u({ feedback: e.target.value })}
+            style={{ background: "transparent", border: "none", borderRadius: 0, boxShadow: "none", padding: "10px 14px 13px" }} />
         </div>
       </Fld>
-      {(d.settings.curriculum || []).length > 0 && (
-        <Fld label="진도표에서 선택">
-          <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-            {d.settings.curriculum.map((c) => <Chip key={c.id} on={f.progress === c.name} onClick={() => u({ progress: f.progress === c.name ? "" : c.name })}>{c.name}</Chip>)}
-          </div>
-        </Fld>
-      )}
-      <Fld label="진도"><input className="inp" placeholder="예) 16비트 기초 · 교재 24p" value={f.progress} onChange={(e) => u({ progress: e.target.value })} /></Fld>
-      <Fld label="피드백"><textarea className="inp" rows={4} placeholder="잘된 점, 다음 과제, 전달사항..." value={f.feedback} onChange={(e) => u({ feedback: e.target.value })} /></Fld>
     </Sheet>
   );
 }
@@ -2081,7 +2230,7 @@ function SettingsSheet() {
   const { d, setD, close, show, rename, sync } = useApp();
   const s = d.settings;
   const setS = (p) => setD((x) => ({ ...x, settings: { ...x.settings, ...p } }));
-  const [tab, setTab] = useState("프로필");
+  const [tab, setTab] = useState("일정");
   const fileRef = useRef(null);
   const [ghTok, setGhTok] = useState("");
   const [ghRem, setGhRem] = useState(true);
@@ -2133,7 +2282,7 @@ function SettingsSheet() {
     return { ...x, settings: { ...x.settings, eventTypes: rest }, events: x.events.map((e) => (e.typeId === id ? { ...e, typeId: fb } : e)) };
   });
   const cycleColor = (id) => setS({ eventTypes: s.eventTypes.map((t) => (t.id === id ? { ...t, color: PALETTE[(PALETTE.indexOf(t.color) + 1) % PALETTE.length] } : t)) });
-  const widgetRows = [["stats", "이번 달 요약 카드"], ["values", "음악 가치관 리마인더"], ["unpaid", "미입금 알림"], ["today", "오늘 · 다가오는 일정"], ["todo", "To-do 리스트"]];
+  const widgetRows = [["stats", "이번 달 요약 카드"], ["unpaid", "미입금 알림"], ["today", "오늘 · 다가오는 일정"], ["todo", "To-do 리스트"]];
   const H = ({ children }) => <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.12em", color: C.gold, margin: "26px 0 12px" }}>{children}</div>;
   const rowBox = { display: "flex", alignItems: "center", justifyContent: "space-between", background: C.card2, borderRadius: 13, padding: "12px 15px", marginBottom: 8, gap: 10 };
   const srow = { display: "flex", alignItems: "center", gap: 9, background: C.card2, borderRadius: 13, padding: "10px 9px 10px 13px", marginBottom: 8 };
@@ -2141,44 +2290,11 @@ function SettingsSheet() {
   return (
     <Sheet title="설정 · 커스터마이징" full footer={<Btn style={{ flex: 1 }} onClick={close}>완료</Btn>}>
       <div style={{ position: "sticky", top: -12, zIndex: 3, background: "#14120B", margin: "-12px -20px 8px", padding: "12px 20px 10px", display: "flex", gap: 6, overflowX: "auto" }}>
-        {["프로필", "연주", "레슨", "연습", "가계부", "데이터"].map((t) => <Chip key={t} on={tab === t} onClick={() => setTab(t)}>{t}</Chip>)}
+        {["일정", "레슨", "연습", "데이터"].map((t) => <Chip key={t} on={tab === t} onClick={() => setTab(t)}>{t}</Chip>)}
       </div>
 
-      {tab === "프로필" && (<>
-        <H>프로필</H>
-        <input className="inp" placeholder="이름 (홈 인사말에 쓰여요)" value={s.userName} onChange={(e) => setS({ userName: e.target.value })} />
-        <H>음악 가치관</H>
-        <Hint>홈 화면의 인용 카드로 보여요. 연필 버튼으로 수정, 드래그로 정렬해요.</Hint>
-        <DragList items={s.values} idOf={(v) => v.id}
-          onSort={(arr) => setS({ values: arr })}
-          render={(v) => (
-            <div style={srow}>
-              <div style={{ flex: 1, minWidth: 0, fontSize: 13.5, lineHeight: 1.5, fontFamily: SERIF, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{v.text}</div>
-              <button className="ib" style={{ padding: 6 }} onClick={() => rename({ title: "문장 수정", value: v.text, onSave: (n) => setD((x) => ({ ...x, settings: { ...x.settings, values: x.settings.values.map((y) => (y.id === v.id ? { ...y, text: n } : y)) } })) })}><Pencil size={14} color={C.faint} /></button>
-              <button className="ib" style={{ padding: 6 }} onClick={() => setS({ values: s.values.filter((x) => x.id !== v.id) })}><Trash2 size={14} color={C.faint} /></button>
-            </div>
-          )} />
-        <AddRow placeholder="새 문장 추가" onAdd={(n) => setS({ values: [...s.values, { id: uid(), text: n }] })} />
-        <H>홈 화면 위젯</H>
-        {widgetRows.map(([k, label]) => (
-          <div key={k} style={rowBox}>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>{label}</div>
-            <Toggle on={s.homeWidgets[k] !== false} onChange={(v) => setS({ homeWidgets: { ...s.homeWidgets, [k]: v } })} />
-          </div>
-        ))}
-        <H>연동</H>
-        <div style={rowBox}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>입금 완료 → 가계부 자동 기록</div>
-            <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>일정을 입금 처리하면 수입으로 자동 저장돼요</div>
-          </div>
-          <Toggle on={!!s.autoLedger} onChange={(v) => setS({ autoLedger: v })} />
-        </div>
-      </>)}
-
-      {tab === "연주" && (<>
-        <H>연주 유형</H>
-        <Hint>색 점을 누르면 색이 바뀌고, '연주'를 켜면 연주 상세 입력 · 연주일정 추출 · 홈의 연주 횟수에 포함돼요. 연필 버튼으로 이름 수정, 드래그로 순서를 바꾸세요.</Hint>
+      {tab === "일정" && (<>
+        <H>일정 유형</H>
         <DragList items={s.eventTypes} idOf={(t) => t.id}
           onSort={(arr) => setS({ eventTypes: arr })}
           render={(t) => (
@@ -2192,34 +2308,10 @@ function SettingsSheet() {
           )} />
         <AddRow placeholder="새 유형 이름" onAdd={(n) => setS({ eventTypes: [...s.eventTypes, { id: uid(), name: n, color: PALETTE[s.eventTypes.length % PALETTE.length], perf: false }] })} />
 
-        <H>악기 목록</H>
-        <Hint>연주 일정의 멤버 악기 드롭다운에 쓰여요. 연필 버튼으로 이름 수정, 드래그로 정렬해요.</Hint>
-        <DragList items={s.instruments || []} idOf={(x) => x}
-          onSort={(arr) => setS({ instruments: arr })}
-          render={(inst) => (
-            <div style={srow}>
-              <div style={sname}>{inst}</div>
-              <button className="ib" style={{ padding: 6 }} onClick={() => rename({ title: "악기 이름 수정", value: inst, onSave: (n) => setD((x) => (x.settings.instruments.includes(n) ? x : { ...x, settings: { ...x.settings, instruments: x.settings.instruments.map((i) => (i === inst ? n : i)) }, events: x.events.map((e) => (e.members && e.members.length ? { ...e, members: e.members.map((m) => (m.inst === inst ? { ...m, inst: n } : m)) } : e)) })) })}><Pencil size={14} color={C.faint} /></button>
-              {(s.instruments || []).length > 1 && <button className="ib" style={{ padding: 6 }} onClick={() => setS({ instruments: s.instruments.filter((x) => x !== inst) })}><Trash2 size={14} color={C.faint} /></button>}
-            </div>
-          )} />
-        <AddRow placeholder="새 악기 이름" onAdd={(n) => { if ((s.instruments || []).includes(n)) return false; setS({ instruments: [...(s.instruments || []), n] }); }} />
-
-        <H>연주인원</H>
-        <Hint>연주 일정의 인원 드롭다운과 팀 기본명에 쓰여요. 연필 버튼으로 이름을 바꿀 수 있어요.</Hint>
-        <DragList items={s.ensembles || []} idOf={(en) => en.id}
-          onSort={(arr) => setS({ ensembles: arr })}
-          render={(en) => (
-            <div style={srow}>
-              <div style={sname}>{en.name} <span style={{ color: C.faint, fontSize: 12.5, fontWeight: 700 }}>{en.size}명</span></div>
-              <button className="ib" style={{ padding: 6 }} onClick={() => rename({ title: "이름 수정", value: en.name, onSave: (n) => setD((x) => ({ ...x, settings: { ...x.settings, ensembles: x.settings.ensembles.map((y) => (y.id === en.id ? { ...y, name: n } : y)) } })) })}><Pencil size={14} color={C.faint} /></button>
-            </div>
-          )} />
       </>)}
 
       {tab === "레슨" && (<>
         <H>학생 리스트</H>
-        <Hint>드래그로 순서를 바꾸고, 연필 버튼으로 이름을 수정해요. 상세 정보 · 삭제는 레슨 탭에서 관리해요.</Hint>
         {d.students.length ? (
           <DragList items={d.students} idOf={(st) => st.id}
             onSort={(arr) => setD((x) => ({ ...x, students: arr }))}
@@ -2233,24 +2325,10 @@ function SettingsSheet() {
         ) : <Hint>아직 등록된 레슨생이 없어요.</Hint>}
         <AddRow placeholder="새 레슨생 이름" onAdd={(n) => setD((x) => ({ ...x, students: [...x.students, { id: uid(), name: n, info: "", contact: "", memo: "", records: [] }] }))} />
 
-        <H>진도표 블록</H>
-        <Hint>레슨 기록의 '진도'를 빠르게 선택할 수 있는 커리큘럼 블록이에요. 연필 버튼으로 이름 수정, 드래그로 정렬해요.</Hint>
-        <DragList items={s.curriculum || []} idOf={(c) => c.id}
-          onSort={(arr) => setS({ curriculum: arr })}
-          render={(c, i) => (
-            <div style={srow}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: C.gold, width: 18, flexShrink: 0 }}>{i + 1}</div>
-              <div style={sname}>{c.name}</div>
-              <button className="ib" style={{ padding: 6 }} onClick={() => rename({ title: "진도표 블록 수정", value: c.name, onSave: (n) => setD((x) => ({ ...x, settings: { ...x.settings, curriculum: x.settings.curriculum.map((y) => (y.id === c.id ? { ...y, name: n } : y)) } })) })}><Pencil size={14} color={C.faint} /></button>
-              <button className="ib" style={{ padding: 6 }} onClick={() => setS({ curriculum: (s.curriculum || []).filter((x) => x.id !== c.id) })}><Trash2 size={14} color={C.faint} /></button>
-            </div>
-          )} />
-        <AddRow placeholder="새 진도 블록 (예: 하프타임 셔플)" onAdd={(n) => setS({ curriculum: [...(s.curriculum || []), { id: uid(), name: n }] })} />
       </>)}
 
       {tab === "연습" && (<>
         <H>연습 탭 이름</H>
-        <Hint>연습 탭의 메뉴 이름을 원하는 대로 바꿀 수 있어요. 비우면 기본 이름으로 돌아가요.</Hint>
         {[["routine", "루틴"], ["memo", "메모"]].map(([k, def]) => (
           <div key={k} style={{ display: "flex", alignItems: "center", gap: 10, background: C.card2, borderRadius: 13, padding: "3px 15px", marginBottom: 8 }}>
             <div style={{ fontSize: 11.5, color: C.faint, fontWeight: 800, width: 58, flexShrink: 0 }}>기본 {def}</div>
@@ -2261,7 +2339,6 @@ function SettingsSheet() {
         ))}
 
         <H>루틴 블록</H>
-        <Hint>연필 버튼으로 이름 수정, 드래그로 정렬해요. 색상은 연습 탭의 연필 버튼으로 수정해요.</Hint>
         <DragList items={d.routine} idOf={(b) => b.id}
           onSort={(arr) => setD((x) => ({ ...x, routine: arr }))}
           render={(b) => (
@@ -2275,7 +2352,7 @@ function SettingsSheet() {
         <AddRow placeholder="새 루틴 블록 이름" onAdd={(n) => setD((x) => ({ ...x, routine: [...x.routine, { id: uid(), label: n, color: PALETTE[x.routine.length % PALETTE.length] }] }))} />
 
         <H>메모 블록</H>
-        <Hint>연습 탭 '메모'의 블록이에요. 연필 버튼으로 이름 수정, 드래그로 정렬해요. 삭제하면 그 블록의 메모도 함께 지워져요.</Hint>
+        <Hint>블록을 삭제하면 그 블록의 메모도 함께 지워져요.</Hint>
         <DragList items={d.memoBlocks || []} idOf={(b) => b.id}
           onSort={(arr) => setD((x) => ({ ...x, memoBlocks: arr }))}
           render={(b) => (
@@ -2286,33 +2363,6 @@ function SettingsSheet() {
             </div>
           )} />
         <AddRow placeholder="새 메모 블록 (예: 느낀점)" onAdd={(n) => setD((x) => ({ ...x, memoBlocks: [...(x.memoBlocks || []), { id: uid(), name: n }] }))} />
-      </>)}
-
-      {tab === "가계부" && (<>
-        <H>수입 카테고리</H>
-        <Hint>연필 버튼으로 이름 수정, 드래그로 정렬해요. 이름을 바꾸면 기존 내역에도 적용돼요.</Hint>
-        <DragList items={s.incomeCats} idOf={(c) => c}
-          onSort={(arr) => setS({ incomeCats: arr })}
-          render={(c) => (
-            <div style={srow}>
-              <div style={sname}>{c}</div>
-              <button className="ib" style={{ padding: 6 }} onClick={() => rename({ title: "카테고리 이름 수정", value: c, onSave: (n) => setD((x) => (x.settings.incomeCats.includes(n) ? x : { ...x, settings: { ...x.settings, incomeCats: x.settings.incomeCats.map((y) => (y === c ? n : y)) }, transactions: x.transactions.map((t) => (t.type === "수입" && t.category === c ? { ...t, category: n } : t)) })) })}><Pencil size={14} color={C.faint} /></button>
-              {s.incomeCats.length > 1 && <button className="ib" style={{ padding: 6 }} onClick={() => setS({ incomeCats: s.incomeCats.filter((x) => x !== c) })}><Trash2 size={14} color={C.faint} /></button>}
-            </div>
-          )} />
-        <AddRow placeholder="수입 카테고리 추가" onAdd={(n) => { if (s.incomeCats.includes(n)) return false; setS({ incomeCats: [...s.incomeCats, n] }); }} />
-
-        <H>지출 카테고리</H>
-        <DragList items={s.expenseCats} idOf={(c) => c}
-          onSort={(arr) => setS({ expenseCats: arr })}
-          render={(c) => (
-            <div style={srow}>
-              <div style={sname}>{c}</div>
-              <button className="ib" style={{ padding: 6 }} onClick={() => rename({ title: "카테고리 이름 수정", value: c, onSave: (n) => setD((x) => (x.settings.expenseCats.includes(n) ? x : { ...x, settings: { ...x.settings, expenseCats: x.settings.expenseCats.map((y) => (y === c ? n : y)) }, transactions: x.transactions.map((t) => (t.type === "지출" && t.category === c ? { ...t, category: n } : t)) })) })}><Pencil size={14} color={C.faint} /></button>
-              {s.expenseCats.length > 1 && <button className="ib" style={{ padding: 6 }} onClick={() => setS({ expenseCats: s.expenseCats.filter((x) => x !== c) })}><Trash2 size={14} color={C.faint} /></button>}
-            </div>
-          )} />
-        <AddRow placeholder="지출 카테고리 추가" onAdd={(n) => { if (s.expenseCats.includes(n)) return false; setS({ expenseCats: [...s.expenseCats, n] }); }} />
       </>)}
 
       {tab === "데이터" && (<>
@@ -2328,13 +2378,11 @@ function SettingsSheet() {
             {!sync.ui.needToken && <Btn kind="g" style={{ padding: "10px 14px", fontSize: 13, flexShrink: 0 }} onClick={sync.now}>지금 동기화</Btn>}
           </div>
           {sync.ui.needToken && (<>
-            <Hint>토큰을 기기에 저장하지 않는 모드예요. 토큰을 다시 입력하면 동기화가 재개돼요.</Hint>
             <input className="inp" type="password" autoComplete="off" placeholder="ghp_ 로 시작하는 토큰 붙여넣기" value={ghTok} onChange={(e) => setGhTok(e.target.value)} style={{ marginBottom: 8 }} />
             <div style={rowBox}>
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>이 기기에 토큰 저장</div>
-                <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>끄면 앱을 다시 열 때마다 입력해야 해요</div>
-              </div>
+                              </div>
               <Toggle on={ghRem} onChange={setGhRem} />
             </div>
             <Btn style={{ width: "100%", marginBottom: 9 }} onClick={ghConnect} disabled={!ghTok.trim() || ghBusy}>{ghBusy ? "연결 중…" : "연결하기"}</Btn>
@@ -2343,8 +2391,7 @@ function SettingsSheet() {
             <div style={rowBox}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>매일 자동 백업</div>
-                <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>매일 첫 동기화 때 그날의 백업을 만들어 최근 {BK_KEEP}일치를 보관해요</div>
-              </div>
+                              </div>
               <Btn kind="g" style={{ padding: "10px 14px", fontSize: 13, flexShrink: 0 }} onClick={loadBackups} disabled={bkBusy}>{bkBusy ? "…" : bkList ? "새로고침" : "목록 보기"}</Btn>
             </div>
             {bkList && (bkList.length ? bkList.map((n) => {
@@ -2357,32 +2404,27 @@ function SettingsSheet() {
                     : <Btn kind="g" style={{ padding: "8px 12px", fontSize: 12.5, flexShrink: 0 }} onClick={() => setBkAsk(n)}>복원</Btn>}
                 </div>
               );
-            }) : <Hint>아직 자동 백업이 없어요. 다음 동기화 때 오늘 백업이 만들어져요.</Hint>)}
+            }) : <Hint>아직 자동 백업이 없어요.</Hint>)}
           </>)}
           {hasSyncBackup && (
             <Btn kind="g" style={{ width: "100%", marginBottom: 9 }} onClick={() => { try { const b = JSON.parse(localStorage.getItem(SYNC_BACKUP_KEY)); if (b && b.data) { setD(normalizeBackup(b.data)); show("동기화 전 데이터로 복구했어요"); } } catch (e) { show("복구 데이터를 읽을 수 없어요"); } }}>동기화로 덮어쓰기 전 데이터 복구</Btn>
           )}
           <Btn kind="g" style={{ width: "100%", marginBottom: 9 }} onClick={sync.disconnect}>동기화 연결 해제</Btn>
-          <div style={{ fontSize: 12, color: C.faint, margin: "2px 0 18px", lineHeight: 1.6 }}>수정하면 자동으로 GitHub에 올라가고, 다른 기기에서 열면 자동으로 받아와요. 오프라인에서 수정한 내용은 인터넷이 연결되는 순간 올라가요. 해제해도 GitHub의 데이터는 지워지지 않아요.</div>
         </>) : (<>
-          <Hint>GitHub 토큰 하나로 아이폰 · 아이패드 데이터가 자동으로 맞춰져요. github.com → Settings → Developer settings → Personal access tokens (classic)에서 <b>gist 권한만</b> 켠 토큰을 만들어 붙여넣으세요. 데이터는 내 계정의 비공개 Gist에 저장돼요.</Hint>
           <input className="inp" type="password" autoComplete="off" placeholder="ghp_ 로 시작하는 토큰 붙여넣기" value={ghTok} onChange={(e) => setGhTok(e.target.value)} style={{ marginBottom: 8 }} />
           <div style={rowBox}>
             <div>
               <div style={{ fontSize: 14, fontWeight: 700 }}>이 기기에 토큰 저장</div>
-              <div style={{ fontSize: 11.5, color: C.faint, marginTop: 3 }}>끄면 앱을 다시 열 때마다 입력해야 해요</div>
-            </div>
+                          </div>
             <Toggle on={ghRem} onChange={setGhRem} />
           </div>
           <Btn style={{ width: "100%", marginBottom: 9 }} onClick={ghConnect} disabled={!ghTok.trim() || ghBusy}>{ghBusy ? "연결 중…" : "연결하기"}</Btn>
-          <div style={{ fontSize: 12, color: C.faint, margin: "2px 0 18px", lineHeight: 1.6 }}>다른 기기에서도 같은 토큰을 입력하면 같은 데이터에 자동으로 연결돼요. 토큰은 절대 다른 사람과 공유하지 마세요.</div>
         </>)}
 
         <H>백업 · 데이터</H>
         <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={onImport} />
         <Btn kind="g" style={{ width: "100%", marginBottom: 9, border: "1px solid rgba(233,190,88,0.45)", color: C.gold }} onClick={doExport}>백업 파일 내보내기 (.json)</Btn>
         <Btn kind="g" style={{ width: "100%", marginBottom: 9 }} onClick={() => fileRef.current && fileRef.current.click()}>백업 파일 불러오기</Btn>
-        <div style={{ fontSize: 12, color: C.faint, margin: "2px 0 18px", lineHeight: 1.6 }}>백업은 항상 같은 이름(BACKSTAGE.json)으로 다운로드 폴더에 저장돼요 — 파일 앱에서 iCloud Drive로 옮겨두면 안전해요. 불러오기를 하면 현재 데이터가 백업 파일 내용으로 교체돼요. 이전 버전 백업도 자동으로 보정돼 그대로 쓸 수 있어요.</div>
       </>)}
     </Sheet>
   );
@@ -2440,7 +2482,6 @@ function Header() {
 }
 
 const NAV = [
-  { k: "home", l: "홈", I: Home },
   { k: "cal", l: "일정", I: CalendarDays },
   { k: "lesson", l: "레슨", I: GraduationCap },
   { k: "prac", l: "연습", I: Music4 },
@@ -2484,7 +2525,7 @@ function Loading() {
 /* ───────────── 앱 루트 ───────────── */
 function App() {
   const [d, setD] = useState(null);
-  const [tab, setTab] = useState("home");
+  const [tab, setTab] = useState("cal");
   const [sheet, setSheet] = useState(null);
   const [ren, setRen] = useState(null);
   const [toast, setToast] = useState(null);
@@ -2497,6 +2538,7 @@ function App() {
   const [syncUI, setSyncUI] = useState({ connected: false, needToken: false, remember: true });
   const syncRef = useRef({ cfg: null, token: null, dirty: false, busy: false, applying: false, etag: null, loaded: false, remoteFiles: null });
   const doSyncRef = useRef(() => {});
+  const upT = useRef(null); /* 마지막 수정 후 1분 뒤 업로드 예약 */
   const dRef = useRef(null);
   dRef.current = d;
 
@@ -2528,23 +2570,30 @@ function App() {
     }
   }, []);
 
-  /* 자동 동기화: 30초 주기 + 온라인 복귀 + 화면 복귀 + 앱 이탈 직전 플러시 */
+  /* 자동 동기화 (배터리 절약): 주기적 확인 없음.
+     받기 = 앱을 열 때 · 화면으로 돌아올 때 · 인터넷 재연결 때 / 올리기 = 마지막 수정 1분 뒤 · 앱을 나갈 때 즉시 */
   useEffect(() => {
-    const tick = setInterval(() => doSyncRef.current(), 30000);
     const onOnline = () => { const S = syncRef.current; if (S.cfg && S.token) doSyncRef.current(); };
     const onOffline = () => { if (syncRef.current.cfg) setSyncState("offline"); };
-    const onVis = () => { if (!document.hidden) doSyncRef.current(); };
+    const onVis = () => {
+      const S = syncRef.current;
+      if (!document.hidden) { doSyncRef.current(); return; }
+      /* 홈 화면으로 나가거나 다른 앱으로 전환: 대기 중인 변경을 바로 올림 */
+      if (S.dirty) { clearTimeout(upT.current); doSyncRef.current(); }
+    };
     const onHide = () => {
       const S = syncRef.current;
-      if (S.cfg && S.token && S.cfg.gistId && S.dirty && navigator.onLine) {
-        try { fetch("https://api.github.com/gists/" + S.cfg.gistId, { method: "PATCH", keepalive: true, headers: GH.hdr(S.token), body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify({ ...dRef.current, syncStamp: S.cfg.stamp || Date.now() }) } } }) }); } catch (e) {}
+      if (S.cfg && S.token && S.cfg.gistId && S.dirty && !S.busy && navigator.onLine) {
+        const body = JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify({ ...dRef.current, syncStamp: S.cfg.stamp || Date.now() }) } } });
+        /* keepalive 요청은 64KB 제한이 있어요. 넘으면 다음에 앱을 열 때 stamp 비교로 올라가요 */
+        if (body.length < 60000) try { fetch("https://api.github.com/gists/" + S.cfg.gistId, { method: "PATCH", keepalive: true, headers: GH.hdr(S.token), body}); } catch (e) {}
       }
     };
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("pagehide", onHide);
-    return () => { clearInterval(tick); window.removeEventListener("online", onOnline); window.removeEventListener("offline", onOffline); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("pagehide", onHide); };
+    return () => { clearTimeout(upT.current); window.removeEventListener("online", onOnline); window.removeEventListener("offline", onOffline); document.removeEventListener("visibilitychange", onVis); window.removeEventListener("pagehide", onHide); };
   }, []);
 
   useEffect(() => {
@@ -2558,6 +2607,7 @@ function App() {
       S.applying = false;
     } else if (S.cfg) {
       S.dirty = true;
+      S.ver = (S.ver || 0) + 1; /* 수정 횟수: 업로드 도중 생긴 수정을 놓치지 않게 */
       S.cfg.stamp = Date.now();
     }
     setSaveState("saving");
@@ -2566,7 +2616,10 @@ function App() {
       let ok = false;
       try { ok = await store.set(KEY, JSON.stringify(d)); } catch (err) { ok = false; }
       setSaveState(ok ? "saved" : "error");
-      if (S.cfg && S.dirty) { syncCfgStore.save(S.cfg); if (S.token) doSyncRef.current(); }
+      if (S.cfg && S.dirty) {
+        syncCfgStore.save(S.cfg);
+        if (S.token) { clearTimeout(upT.current); upT.current = setTimeout(() => doSyncRef.current(), 60000); }
+      }
     }, 700);
     return () => clearTimeout(saveT.current);
   }, [d]);
@@ -2590,6 +2643,7 @@ function App() {
     const S = syncRef.current;
     if (!S.cfg || !S.token || S.busy) return;
     if (!navigator.onLine) { setSyncState("offline"); return; }
+    clearTimeout(upT.current);
     S.busy = true; setSyncState("syncing");
     try {
       let remoteObj = null, remoteStamp = 0, skip = false;
@@ -2616,6 +2670,7 @@ function App() {
         /* 앱을 껐다 켜도 stamp 비교로 미전송 변경을 놓치지 않아요 */
         const stamp = localStamp || Date.now();
         S.cfg.stamp = stamp;
+        const v0 = S.ver || 0;
         const content = JSON.stringify({ ...dRef.current, syncStamp: stamp });
         const files = { [GIST_FILE]: { content } };
         /* 매일 첫 업로드 때 그날의 자동 백업을 만들고, 오래된 백업은 정리해요 */
@@ -2629,7 +2684,10 @@ function App() {
         else S.cfg.gistId = await GH.create(S.token, files);
         S.cfg.lastBackupDate = today;
         if (S.remoteFiles) S.remoteFiles = S.remoteFiles.filter((n) => files[n] !== null).concat(Object.keys(files).filter((n) => files[n] && !S.remoteFiles.includes(n)));
-        S.dirty = false; S.etag = null; syncCfgStore.save(S.cfg);
+        /* 올리는 동안 새 수정이 있었다면 아직 '올릴 것 있음'으로 남겨 다음에 올려요 */
+        S.dirty = (S.ver || 0) !== v0; S.etag = null;
+        if (S.dirty) { S.cfg.stamp = Date.now(); clearTimeout(upT.current); upT.current = setTimeout(() => doSyncRef.current(), document.hidden ? 0 : 60000); }
+        syncCfgStore.save(S.cfg);
         if (opts.manual) show("GitHub에 최신 데이터를 올렸어요");
       } else if (opts.manual) show("이미 최신 상태예요");
       setSyncState("idle"); setSyncAt(Date.now());
@@ -2725,7 +2783,6 @@ function App() {
           <div style={{ position: "absolute", top: -130, left: "50%", transform: "translateX(-50%)", width: 460, height: 340, background: "radial-gradient(closest-side, rgba(233,190,88,0.11), transparent)", pointerEvents: "none" }} />
           <Header />
           <main style={{ padding: "0 18px 118px", position: "relative" }}>
-            {tab === "home" && <HomeTab />}
             {tab === "cal" && <ScheduleTab />}
             {tab === "lesson" && <LessonsTab />}
             {tab === "prac" && <PracticeTab />}
